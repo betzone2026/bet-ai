@@ -8,9 +8,11 @@ import { DisclaimerNote } from '@/components/ui/compliance';
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const profile = await getProfile();
 
-  // Middleware already blocks anonymous requests; this is the second
-  // gate, so a misconfigured matcher can never expose private data.
-  if (!profile) redirect('/login');
+  // Middleware turns anonymous requests away at the edge on the strength of the
+  // session cookie alone. This is the authoritative gate: it resolves the real
+  // user, so a forged, revoked or expired cookie is rejected here even though
+  // it satisfied middleware.
+  if (!profile) redirect('/login?error=session_expired');
 
   return (
     <div className="flex min-h-screen">

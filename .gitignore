@@ -4,3 +4,8 @@ node_modules
 .env.local
 *.tsbuildinfo
 next-env.d.ts
+
+# Local Netlify folder. The feature markers under .netlify/features must be
+# committed — they are what enables Identity and other primitives on deploy.
+.netlify/*
+!.netlify/features/

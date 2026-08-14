@@ -5,11 +5,23 @@ import { useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { AuthError, login } from '@netlify/identity';
 import { Button } from '@/components/ui/button';
+import { safeNextPath } from '@/lib/auth/callback-tokens';
 import { Field, FormError } from '../form-shell';
+
+/**
+ * Reasons the app may have sent the user here, phrased for the person reading
+ * them. Anything unrecognised is ignored rather than echoed back, so the query
+ * string cannot be used to render arbitrary text on the login page.
+ */
+const REDIRECT_REASONS: Record<string, string> = {
+  authentication_failed: 'We could not complete that sign-in link. Please log in to continue.',
+  session_expired: 'Your session expired. Please log in again.',
+};
 
 export function LoginForm() {
   const params = useSearchParams();
-  const next = params.get('next') ?? '/dashboard';
+  const next = safeNextPath(params.get('next'));
+  const reason = REDIRECT_REASONS[params.get('error') ?? ''] ?? null;
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,12 +44,14 @@ export function LoginForm() {
       setPending(false);
       return;
     }
-    window.location.href = next.startsWith('/') ? next : '/dashboard';
+    // Full navigation, not a router push: the server render of the destination
+    // has to see the `nf_jwt` cookie that `login()` just wrote.
+    window.location.href = next;
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <FormError message={error} />
+      <FormError message={error ?? reason} />
 
       <Field
         label="Email"
