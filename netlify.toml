@@ -1,0 +1,20 @@
+# Netlify deployment for the SportAlpha AI frontend.
+# The Next.js runtime plugin handles the App Router, middleware and
+# route handlers. Environment variables are set in the Netlify UI.
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[[redirects]]
+  from = "/admin/*"
+  to = "/admin/:splat"
+  status = 200
+  conditions = { Role = ["admin"] }
+
+[[redirects]]
+  from = "/admin/*"
+  to = "/dashboard"
+  status = 302

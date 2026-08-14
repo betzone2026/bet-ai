@@ -1,0 +1,38 @@
+{
+  "name": "sportalpha-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@netlify/database": "^1.1.0",
+    "@netlify/functions": "^5.3.0",
+    "@netlify/identity": "^1.2.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.454.0",
+    "next": "^16.3.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "recharts": "^2.13.0",
+    "stripe": "^17.2.1",
+    "tailwind-merge": "^2.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "autoprefixer": "^10.4.20",
+    "drizzle-kit": "^1.0.0-beta.22",
+    "drizzle-orm": "^1.0.0-beta.22",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.1",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^6.0.3"
+  }
+}
