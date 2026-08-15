@@ -2,24 +2,40 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { AuthError, getUser, handleAuthCallback } from '@netlify/identity';
+import { getUser, handleAuthCallback } from '@netlify/identity';
 import {
-  destinationForCallback,
   hashHasAuthToken,
+  redeemCallbackOnce,
   searchToAuthHash,
+  type RedemptionOutcome,
 } from '@/lib/auth/callback-tokens';
+import { cookieHeaderHasSession } from '@/lib/auth/session-cookie';
+
+/**
+ * Diagnostic trail for the confirmation flow, readable from the browser console
+ * of a real signup.
+ *
+ * Deliberately records only shapes and outcomes — whether a token was present,
+ * which kind it was, whether a user and a session cookie came back. Token
+ * values, JWTs and passwords never reach it.
+ */
+function log(event: string, detail?: Record<string, string | boolean>) {
+  if (detail) console.info(`[auth] ${event}`, detail);
+  else console.info(`[auth] ${event}`);
+}
 
 export function CallbackClient() {
-  const started = useRef(false);
-  const [failed, setFailed] = useState(false);
+  // Two layers, guarding two different things. This flag stops *this* component
+  // from running the flow twice, which Strict Mode's double-invoked effect would
+  // otherwise do. The singleton inside `redeemCallbackOnce` stops any *other*
+  // caller from redeeming the same token. Only the second is load-bearing for
+  // correctness; this one keeps the navigation and the logs to one pass.
+  const handled = useRef(false);
+  const [failure, setFailure] = useState<'rejected' | 'unverified' | null>(null);
 
   useEffect(() => {
-    // Identity tokens are single use and React Strict Mode double-invokes
-    // effects, so an unguarded call redeems the token once successfully and
-    // once with an already-spent token — reporting a working confirmation as
-    // a failure.
-    if (started.current) return;
-    started.current = true;
+    if (handled.current) return;
+    handled.current = true;
 
     void (async () => {
       // Identity normally delivers the token in the fragment, but a customised
@@ -32,50 +48,36 @@ export function CallbackClient() {
         }
       }
 
-      if (!hashHasAuthToken(window.location.hash)) {
-        // Reached without a token at all. An existing session belongs in the
-        // app; anyone else belongs at the login form. Neither is an error.
-        const existing = await getUser();
-        window.location.replace(existing ? '/dashboard' : '/login');
-        return;
-      }
+      // Single redemption path. `handleAuthCallback()` is the only call that
+      // both redeems the token *and* writes the `nf_jwt` cookie, so nothing here
+      // may also call `confirmEmail()` — that would spend the same single-use
+      // token a second time and produce a session the server cannot see.
+      const outcome = await redeemCallbackOnce({
+        readHash: () => window.location.hash,
+        redeem: handleAuthCallback,
+        hasSessionCookie: () => cookieHeaderHasSession(document.cookie),
+        log,
+      });
 
-      try {
-        const result = await handleAuthCallback();
-        if (!result) {
-          window.location.replace('/login?error=authentication_failed');
-          return;
-        }
-        // `replace` rather than `href` so the single-use token is not left in
-        // session history, and a full navigation so the freshly written
-        // `nf_jwt` cookie reaches the server render of the destination.
-        window.location.replace(destinationForCallback(result.type, result.token));
-      } catch (caught) {
-        // Message only — the token and any stack trace stay out of the UI.
-        console.error(
-          '[auth] identity callback failed:',
-          caught instanceof AuthError || caught instanceof Error
-            ? caught.message
-            : 'unknown error',
-        );
-        setFailed(true);
-      }
+      await settle(outcome, setFailure);
     })();
   }, []);
 
-  if (failed) {
+  if (failure) {
     return (
       <div className="space-y-4">
         <p
           role="alert"
           className="rounded-lg border border-down/35 bg-down/[0.07] px-3 py-2 text-xs text-down"
         >
-          We could not complete the confirmation.
+          {failure === 'unverified'
+            ? 'Your address was confirmed, but we could not start a session.'
+            : 'We could not complete the confirmation.'}
         </p>
         <p className="text-sm leading-relaxed text-muted">
-          Confirmation links can only be used once and expire after 24 hours. If you already
-          confirmed this address, log in normally. Otherwise request a new link by signing up again
-          with the same email.
+          {failure === 'unverified'
+            ? 'Your account is ready — log in with the email and password you just chose.'
+            : 'Confirmation links can only be used once and expire after 24 hours. If you already confirmed this address, log in normally. Otherwise request a new link by signing up again with the same email.'}
         </p>
         <div className="flex flex-wrap gap-3 text-sm">
           <Link href="/login" className="text-alpha hover:underline">
@@ -98,4 +100,47 @@ export function CallbackClient() {
       Completing sign in…
     </div>
   );
+}
+
+/**
+ * Turns the redemption outcome into a navigation, or into a message when there
+ * is nothing to navigate to.
+ *
+ * Navigation always uses `location.replace`: a full load so the freshly written
+ * `nf_jwt` cookie reaches the server render of the destination, and a *replace*
+ * so the single-use token is not left behind in session history where the back
+ * button would replay it.
+ */
+async function settle(
+  outcome: RedemptionOutcome,
+  setFailure: (value: 'rejected' | 'unverified') => void,
+) {
+  switch (outcome.status) {
+    case 'redeemed':
+      window.location.replace(outcome.destination);
+      return;
+
+    case 'absent':
+    case 'consumed': {
+      // Either an ordinary visit with no token, or a token this page already
+      // redeemed. Both are answered the same way: by asking who is actually
+      // logged in, rather than by assuming. A session found here is a
+      // confirmation that worked, so it must not be reported as a failure.
+      const user = await getUser();
+      log('session check', { userAvailable: user !== null });
+      log('redirect destination', { destination: user ? '/dashboard' : '/login' });
+      window.location.replace(user ? '/dashboard' : '/login');
+      return;
+    }
+
+    case 'unverified':
+      // The token was accepted but no session cookie followed, so sending the
+      // user to a private route would only bounce them back out with a
+      // misleading "session expired". Say what happened instead.
+      setFailure('unverified');
+      return;
+
+    case 'failed':
+      setFailure('rejected');
+  }
 }

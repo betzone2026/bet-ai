@@ -1,18 +1,20 @@
 /**
- * Pure helpers for the Identity auth callback.
+ * The Identity auth callback: token recognition, redemption, and where each
+ * outcome lands.
  *
  * `handleAuthCallback()` from `@netlify/identity` only reads `window.location.hash`,
  * and it is the only code path that both redeems the token *and* writes the
  * `nf_jwt` cookie the server needs to see the session. The standalone
  * `confirmEmail()` helper redeems the token without writing that cookie, so a
  * confirmation handled that way would log the user in on the client and still
- * fail every server render.
+ * fail every server render. This module therefore normalises whatever shape the
+ * link arrives in into a hash fragment, so the single known-correct code path
+ * always runs — and owns the guard that makes sure it runs exactly once.
  *
- * These helpers therefore normalise whatever shape the link arrives in into a
- * hash fragment, so the single known-correct code path always runs.
- *
- * Kept free of browser globals so they can be unit tested directly.
+ * Kept free of browser globals — they are injected — so all of it, including the
+ * redemption guard, can be unit tested directly.
  */
+import type { CallbackResult } from '@netlify/identity';
 
 /** Hash parameters `handleAuthCallback()` recognises, in the order it checks them. */
 export const AUTH_TOKEN_PARAMS = [
@@ -39,8 +41,20 @@ const TYPE_TO_PARAM: Record<string, (typeof AUTH_TOKEN_PARAMS)[number]> = {
 
 /** True when the fragment already carries a token `handleAuthCallback()` accepts. */
 export function hashHasAuthToken(hash: string): boolean {
+  return authTokenParam(hash) !== null;
+}
+
+/**
+ * Which token parameter a fragment carries, or `null` for none.
+ *
+ * Returned in the same order `handleAuthCallback()` checks them, so this names
+ * the token the SDK will actually act on when a fragment somehow carries more
+ * than one. Exposed separately from {@link hashHasAuthToken} so the callback can
+ * report *which kind* of token it saw without ever touching the value.
+ */
+export function authTokenParam(hash: string): (typeof AUTH_TOKEN_PARAMS)[number] | null {
   const params = new URLSearchParams(hash.replace(/^#/, ''));
-  return AUTH_TOKEN_PARAMS.some((name) => Boolean(params.get(name)));
+  return AUTH_TOKEN_PARAMS.find((name) => Boolean(params.get(name))) ?? null;
 }
 
 /**
@@ -129,4 +143,125 @@ export function safeNextPath(value: string | null | undefined, fallback = '/dash
   if (value.includes('\\')) return fallback;
   if (/^\/+(?:[a-z][a-z0-9+.-]*:)/i.test(value)) return fallback;
   return value;
+}
+
+/* ---------------------------------------------------------------------------
+ * Exactly-once redemption
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Identity tokens are single use. The moment one is redeemed the SDK clears the
+ * fragment and the token is spent server-side, so a second attempt fails — and a
+ * failure *after* a success reports a working confirmation as a broken one.
+ * Every cause of a second attempt is real: React Strict Mode double-invokes
+ * effects, an error boundary or Suspense retry remounts the component, and any
+ * other handler mounted elsewhere in the tree races the first.
+ *
+ * A `useRef` guard only covers one component instance, so the real guard is the
+ * module-level in-flight promise below. Every caller, from any component
+ * instance, awaits the same single redemption and sees the same outcome.
+ */
+
+/** What the single redemption attempt concluded. */
+export type RedemptionOutcome =
+  /** The token was redeemed and a usable session exists. */
+  | { status: 'redeemed'; type: CallbackType; destination: string }
+  /** No auth token in the fragment. Not an error: an ordinary visit to the route. */
+  | { status: 'absent' }
+  /**
+   * The fragment held a token but the SDK found none left to act on, so it had
+   * already been redeemed and the fragment cleared. The session created by that
+   * earlier redemption is the real one.
+   */
+  | { status: 'consumed' }
+  /**
+   * Redemption reported success but no session materialised. Treated as a
+   * failure so the user is never sent to a private route that would bounce them
+   * straight back out.
+   */
+  | { status: 'unverified' }
+  /** The SDK rejected the token: already used, expired, or malformed. */
+  | { status: 'failed'; message: string };
+
+export interface RedemptionDeps {
+  /** Current `window.location.hash`. */
+  readHash: () => string;
+  /** `handleAuthCallback` from `@netlify/identity`. The only redemption path. */
+  redeem: () => Promise<CallbackResult | null>;
+  /** Whether the `nf_jwt` cookie the server reads is now present. */
+  hasSessionCookie: () => boolean;
+  /** Diagnostics. Never receives a token, JWT or any other secret. */
+  log?: (event: string, detail?: Record<string, string | boolean>) => void;
+}
+
+let inFlight: Promise<RedemptionOutcome> | null = null;
+
+/**
+ * Runs the redemption at most once per page load. Repeat calls — concurrent or
+ * later — return the first attempt's result without touching the token again.
+ */
+export function redeemCallbackOnce(deps: RedemptionDeps): Promise<RedemptionOutcome> {
+  inFlight ??= runRedemption(deps);
+  return inFlight;
+}
+
+/** Clears the guard. Tests only; each case needs a fresh page-load state. */
+export function resetRedemptionState(): void {
+  inFlight = null;
+}
+
+async function runRedemption(deps: RedemptionDeps): Promise<RedemptionOutcome> {
+  const log = deps.log ?? (() => {});
+
+  // Read the fragment *before* redeeming: a successful `handleAuthCallback()`
+  // clears it, so afterwards there is nothing left to report on.
+  const detected = authTokenParam(deps.readHash());
+  log('callback started', { tokenPresent: detected !== null, tokenType: detected ?? 'none' });
+
+  if (!detected) return { status: 'absent' };
+
+  let result: CallbackResult | null;
+  try {
+    log('handleAuthCallback started');
+    result = await deps.redeem();
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : 'Unknown authentication error.';
+    log('handleAuthCallback failure', { message });
+    return { status: 'failed', message };
+  }
+
+  if (!result) {
+    // The fragment carried a token a moment ago and the SDK saw none, so it was
+    // spent between the two reads — another redemption got there first.
+    log('handleAuthCallback success', { consumedElsewhere: true });
+    return { status: 'consumed' };
+  }
+
+  const sessionCookie = deps.hasSessionCookie();
+  log('handleAuthCallback success', {
+    type: result.type,
+    userAvailable: result.user !== null,
+    sessionCookieDetected: sessionCookie,
+  });
+
+  if (!isSessionReady(result, sessionCookie)) return { status: 'unverified' };
+
+  const destination = destinationForCallback(result.type, result.token);
+  log('redirect destination', { destination });
+  return { status: 'redeemed', type: result.type, destination };
+}
+
+/**
+ * Whether the callback left behind something the rest of the app can actually
+ * use.
+ *
+ * For every type that logs the user in that means both a resolved user and the
+ * `nf_jwt` cookie: the client-side session alone is not enough, because the
+ * server render of the destination reads the cookie and nothing else. An invite
+ * is the exception by design — it yields a token and no session, because the
+ * account does not exist until a password is set.
+ */
+function isSessionReady(result: CallbackResult, sessionCookie: boolean): boolean {
+  if (result.type === 'invite') return Boolean(result.token);
+  return result.user !== null && sessionCookie;
 }

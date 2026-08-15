@@ -1,7 +1,9 @@
+import { cookies } from 'next/headers';
 import { getUser, type User } from '@netlify/identity';
 import { eq } from 'drizzle-orm';
 import { db } from '@/../db';
 import { profiles } from '@/../db/schema';
+import { SESSION_COOKIE } from '@/lib/auth/session-cookie';
 import type { PlanId } from '@/lib/config/plans';
 
 export interface AppProfile {
@@ -19,12 +21,38 @@ function metadataString(user: User, key: string): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-export async function getSessionUser() {
+/**
+ * Reads the session cookie through `next/headers`.
+ *
+ * The value is deliberately unused by most callers: what matters is the *call*.
+ * `cookies()` is a Next.js dynamic API, so touching it marks every route that
+ * resolves a user as request-time rendered. Without it Next.js is free to
+ * prerender those routes at build time, where there is no request and therefore
+ * no session — freezing an anonymous render, and any redirect it produces, into
+ * the deployed output for every visitor.
+ *
+ * `@netlify/identity` does try to opt into dynamic rendering itself, but it does
+ * so through a runtime `require('next/headers')` that is swallowed when it
+ * fails. Doing it explicitly here makes the guarantee the app's own, and it
+ * cannot silently regress.
+ */
+export async function getSessionCookie(): Promise<string | null> {
+  const store = await cookies();
+  return store.get(SESSION_COOKIE)?.value ?? null;
+}
+
+/** Whether this request carried a session cookie at all. */
+export async function hasSessionCookie(): Promise<boolean> {
+  return (await getSessionCookie()) !== null;
+}
+
+export async function getSessionUser(): Promise<User | null> {
+  await getSessionCookie();
   return getUser();
 }
 
 export async function getProfile(): Promise<AppProfile | null> {
-  const user = await getUser();
+  const user = await getSessionUser();
   if (!user) return null;
 
   const email = user.email ?? '';
@@ -58,4 +86,3 @@ export async function requireProfile(): Promise<AppProfile> {
   if (!profile) throw new Error('AUTH_REQUIRED');
   return profile;
 }
-
