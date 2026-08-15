@@ -13,7 +13,14 @@ type Result = { ok: boolean; message: string } | null;
  * reports what the run actually did — records received, written, failed —
  * rather than a bare success tick.
  */
-export function SyncNowButton({ disabled }: { disabled: boolean }) {
+export function SyncNowButton({
+  disabled,
+  disabledReason,
+}: {
+  disabled: boolean;
+  /** Shown under the button so a disabled control explains itself. */
+  disabledReason?: string;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState(false);
@@ -31,6 +38,7 @@ export function SyncNowButton({ disabled }: { disabled: boolean }) {
       const payload = (await response.json().catch(() => null)) as {
         error?: string;
         message?: string;
+        code?: string | null;
         summary?: {
           status: string;
           recordsReceived: number;
@@ -39,10 +47,11 @@ export function SyncNowButton({ disabled }: { disabled: boolean }) {
           recordsFailed: number;
           apiRequests: number;
           skippedReason?: string;
+          errors?: string[];
         };
       } | null;
 
-      if (!response.ok || !payload?.summary) {
+      if (!payload?.summary) {
         setResult({
           ok: false,
           message: payload?.message ?? payload?.error ?? `Sync failed (${response.status}).`,
@@ -51,12 +60,22 @@ export function SyncNowButton({ disabled }: { disabled: boolean }) {
       }
 
       const s = payload.summary;
+      if (s.status === 'failed') {
+        // The code is the actionable part — a spent quota, a rejected key and a
+        // plan restriction need three different responses from the operator.
+        setResult({
+          ok: false,
+          message: `${payload.code ?? 'FAILED'}: ${s.errors?.[0] ?? 'the sync did not complete.'}`,
+        });
+        return;
+      }
+
       setResult({
-        ok: s.status !== 'failed',
+        ok: true,
         message:
           s.status === 'skipped'
             ? `Skipped: ${s.skippedReason ?? 'nothing to do'}.`
-            : `${s.status}: ${s.recordsReceived} received, ${s.recordsInserted} new, ${s.recordsUpdated} updated, ${s.recordsFailed} failed, ${s.apiRequests} API requests.`,
+            : `${s.status}: ${s.recordsReceived} received, ${s.recordsInserted} new, ${s.recordsUpdated} updated, ${s.recordsFailed} failed, ${s.apiRequests} API request${s.apiRequests === 1 ? '' : 's'}.`,
       });
       startTransition(() => router.refresh());
     } catch {
@@ -71,6 +90,9 @@ export function SyncNowButton({ disabled }: { disabled: boolean }) {
       <Button type="button" size="sm" onClick={run} disabled={disabled || busy || pending}>
         {busy ? 'Syncing…' : 'Sync now'}
       </Button>
+      {disabled && disabledReason && (
+        <p className="max-w-sm text-right text-xs text-muted">{disabledReason}</p>
+      )}
       {result && (
         <p className={`max-w-sm text-right text-xs ${result.ok ? 'text-muted' : 'text-down'}`}>
           {result.message}

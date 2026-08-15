@@ -17,6 +17,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getProfile } from '@/lib/auth/server';
 import { isLeagueKey, type LeagueKey } from '@/lib/sports/config';
+import { codeFromSummary, httpStatusForCode } from '@/lib/sports/errors';
 import { isProviderConfigured } from '@/lib/sports/registry';
 import { syncFixtureDetail } from '@/lib/sports/sync/fixture-detail';
 import { syncFixtures } from '@/lib/sports/sync/fixtures';
@@ -28,6 +29,39 @@ export const dynamic = 'force-dynamic';
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const SYNC_TYPES = ['fixtures', 'standings', 'fixture-detail'] as const;
 type SyncType = (typeof SYNC_TYPES)[number];
+
+/** Whatever a sync service returns, viewed through what the route needs. */
+interface SyncOutcome {
+  status: string;
+  errors: string[];
+  skippedReason?: string;
+}
+
+/**
+ * Answers with the status that matches the actual failure.
+ *
+ * A blanket 502 for every unsuccessful run hides the difference between a spent
+ * quota, a rejected key and a plan that does not cover the request — three
+ * things an admin resolves in three different ways. The code is recovered from
+ * the summary line the sync already recorded, so the mapping lives in one place
+ * rather than being restated per endpoint.
+ */
+function respond(syncType: SyncType, summary: SyncOutcome): NextResponse {
+  if (summary.status !== 'failed') {
+    // A run skipped because the allowance is gone is not an error, but it did
+    // not do the work either — say so with the rate-limit status.
+    if (summary.status === 'skipped' && summary.skippedReason === 'RATE_LIMITED') {
+      return NextResponse.json({ syncType, summary }, { status: 429 });
+    }
+    return NextResponse.json({ syncType, summary }, { status: 200 });
+  }
+
+  const code = codeFromSummary(summary.errors[0]);
+  return NextResponse.json(
+    { syncType, summary, code },
+    { status: httpStatusForCode(code) },
+  );
+}
 
 interface SyncBody {
   date?: unknown;
@@ -85,7 +119,7 @@ export async function POST(request: NextRequest) {
       );
     }
     const summary = await syncFixtureDetail({ fixtureId: body.fixtureId, triggeredBy });
-    return NextResponse.json({ syncType, summary }, { status: summary.status === 'failed' ? 502 : 200 });
+    return respond(syncType, summary);
   }
 
   if (syncType === 'standings') {
@@ -98,7 +132,7 @@ export async function POST(request: NextRequest) {
       triggeredBy,
       force,
     });
-    return NextResponse.json({ syncType, summary }, { status: summary.status === 'failed' ? 502 : 200 });
+    return respond(syncType, summary);
   }
 
   const summary = await syncFixtures({
@@ -109,5 +143,5 @@ export async function POST(request: NextRequest) {
     force,
   });
 
-  return NextResponse.json({ syncType, summary }, { status: summary.status === 'failed' ? 502 : 200 });
+  return respond(syncType, summary);
 }

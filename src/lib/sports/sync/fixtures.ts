@@ -20,10 +20,11 @@ import {
   SUPPORTED_LEAGUE_KEYS,
   type LeagueKey,
 } from '../config.ts';
-import { describeError, isSportsProviderError } from '../errors.ts';
+import { SportsProviderError, describeError, isSportsProviderError } from '../errors.ts';
 import { sportsLog } from '../logging.ts';
 import type { SportsDataProvider } from '../provider.ts';
 import { dedupeFixtureBundles, validateFixtureBundle } from '../quality.ts';
+import { canSpendQuota, readProviderQuota, recordQuotaObservation } from '../quota.ts';
 import { getProvider } from '../registry.ts';
 import { upsertFixtures, upsertLeagues, upsertSeasons, upsertTeams, type FixtureWrite } from '../repository.ts';
 import type { League, Season, Team } from '../types.ts';
@@ -66,6 +67,26 @@ export interface SyncFixturesSummary {
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Wraps a write so a storage failure is reported as one.
+ *
+ * Without this, a broken database surfaces as an opaque `[UNEXPECTED]` line and
+ * an admin goes looking at the provider — which is working fine. The distinction
+ * matters because the two have nothing in common: one is fixed by waiting or by
+ * a new key, the other by fixing the database.
+ */
+async function write<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (cause) {
+    throw new SportsProviderError(
+      'DATABASE_ERROR',
+      'Fixtures were fetched but could not be written to the database.',
+      { provider: DEFAULT_PROVIDER, cause },
+    );
+  }
 }
 
 /**
@@ -125,6 +146,19 @@ export async function syncFixtures(
     }
   }
 
+  // Quota guard. Only a measured zero stops the run — an unknown allowance is
+  // allowed through, because attempting the request is how it gets measured.
+  // `force` overrides freshness, never the provider's own ceiling.
+  const quota = await readProviderQuota(providerName);
+  if (!canSpendQuota(quota)) {
+    summary.status = 'skipped';
+    summary.skippedReason = 'RATE_LIMITED';
+    summary.errors.push(
+      `[RATE_LIMITED] the daily allowance is spent (0 of ${quota.dailyLimit ?? '?'} left); it resets at 00:00 UTC.`,
+    );
+    return summary;
+  }
+
   const runId = await startSyncRun({
     provider: providerName,
     syncType: `${syncType}:${date}`,
@@ -170,11 +204,11 @@ export async function syncFixtures(
       });
     }
 
-    if (leaguesToWrite.size > 0) await upsertLeagues([...leaguesToWrite.values()]);
-    if (seasonsToWrite.size > 0) await upsertSeasons([...seasonsToWrite.values()]);
-    if (teamsToWrite.size > 0) await upsertTeams([...teamsToWrite.values()]);
+    if (leaguesToWrite.size > 0) await write(() => upsertLeagues([...leaguesToWrite.values()]));
+    if (seasonsToWrite.size > 0) await write(() => upsertSeasons([...seasonsToWrite.values()]));
+    if (teamsToWrite.size > 0) await write(() => upsertTeams([...teamsToWrite.values()]));
 
-    const written = await upsertFixtures(fixtureWrites);
+    const written = await write(() => upsertFixtures(fixtureWrites));
     summary.recordsInserted = written.inserted;
     summary.recordsUpdated = written.updated;
     summary.status = summary.recordsFailed > 0 ? 'partial' : 'completed';
@@ -191,6 +225,11 @@ export async function syncFixtures(
       sportsLog.error('fixture sync failed with an unexpected error');
     }
   }
+
+  // Record what the provider said about the allowance, whichever way the run
+  // went: a failed call is often the most informative reading there is.
+  const report = provider.lastResponse?.() ?? null;
+  if (report) await recordQuotaObservation(providerName, report);
 
   const usage = provider.usage();
   summary.apiRequests = usage.reduce((total, entry) => total + entry.requests, 0);

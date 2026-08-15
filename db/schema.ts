@@ -414,3 +414,30 @@ export const sportsApiUsage = pgTable(
   ],
 );
 
+/**
+ * Latest quota reading per provider.
+ *
+ * `sports_api_usage` counts what we spent; this records what the provider says
+ * is left, which is not the same number — other processes, other environments
+ * and the provider's own accounting all move it. One row per provider, always
+ * overwritten: a reading is only useful while it is current.
+ *
+ * Every counter is nullable because "the provider did not say" is a real state
+ * and must stay distinguishable from "zero left".
+ */
+export const sportsProviderQuota = pgTable('sports_provider_quota', {
+  provider: text().primaryKey(),
+  dailyLimit: integer('daily_limit'),
+  dailyRemaining: integer('daily_remaining'),
+  burstLimit: integer('burst_limit'),
+  burstRemaining: integer('burst_remaining'),
+  /** HTTP status of the last response — 200 even when the payload was an error. */
+  lastStatus: integer('last_status'),
+  lastEndpoint: text('last_endpoint'),
+  /** `SUCCESS`, or the classified error code. */
+  lastOutcome: text('last_outcome'),
+  lastMessage: text('last_message'),
+  lastResultCount: integer('last_result_count'),
+  observedAt: timestamp('observed_at', { withTimezone: true }).notNull().defaultNow(),
+});
+

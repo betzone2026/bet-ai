@@ -156,6 +156,44 @@ describe('error classification', () => {
     );
   });
 
+  it('treats a plan restriction as PLAN_RESTRICTED, not as a rate limit', async () => {
+    // Observed verbatim: this is the response that used to be reported as
+    // `RATE_LIMITED status: 200` while 99 of 100 daily requests were unspent.
+    const { impl } = stubFetch(() =>
+      envelope({
+        get: 'fixtures',
+        parameters: { league: '135', season: '2026', date: '2026-08-15' },
+        errors: { plan: 'Free plans do not have access to this season, try from 2022 to 2024.' },
+        results: 0,
+        paging: { current: 1, total: 1 },
+        response: [],
+      }),
+    );
+    const client = new ApiFootballClient({ apiKey: TEST_KEY, fetchImpl: impl });
+
+    await assert.rejects(
+      () => client.get('fixtures', {}),
+      (error: unknown) => {
+        assert.ok(isSportsProviderError(error));
+        assert.equal(error.code, 'PLAN_RESTRICTED');
+        assert.equal(error.retryable, false, 'waiting cannot fix a plan restriction');
+        return true;
+      },
+    );
+  });
+
+  it('treats an unrecognised provider complaint as PROVIDER_ERROR', async () => {
+    const { impl } = stubFetch(() =>
+      envelope({ get: 'fixtures', errors: { bug: 'Internal error' }, response: [] }),
+    );
+    const client = new ApiFootballClient({ apiKey: TEST_KEY, fetchImpl: impl });
+
+    await assert.rejects(
+      () => client.get('fixtures', {}),
+      (error: unknown) => isSportsProviderError(error) && error.code === 'PROVIDER_ERROR',
+    );
+  });
+
   it('treats a token message in a 200 body as an authentication failure', async () => {
     const { impl } = stubFetch(() =>
       envelope({ get: 'fixtures', errors: { token: 'Invalid API key' }, response: [] }),
@@ -244,7 +282,109 @@ describe('request accounting', () => {
     const limits = client.rateLimit();
     assert.equal(limits?.dailyLimit, 7500);
     assert.equal(limits?.dailyRemaining, 7412);
-    assert.equal(limits?.minuteRemaining, 299);
+    assert.equal(limits?.burstLimit, 300);
+    assert.equal(limits?.burstRemaining, 299);
+  });
+
+  it('reports the last response so the admin screen can show it', async () => {
+    const { impl } = stubFetch(() =>
+      envelope(OK_BODY, {
+        headers: {
+          'content-type': 'application/json',
+          'x-ratelimit-requests-limit': '100',
+          'x-ratelimit-requests-remaining': '99',
+        },
+      }),
+    );
+    const client = new ApiFootballClient({ apiKey: TEST_KEY, fetchImpl: impl, diagnostics: false });
+
+    await client.get('fixtures', {});
+    const last = client.lastResponse();
+    assert.equal(last?.outcome, 'SUCCESS');
+    assert.equal(last?.status, 200);
+    assert.equal(last?.endpoint, 'fixtures');
+    assert.equal(last?.resultCount, 1);
+    assert.equal(last?.message, null);
+  });
+});
+
+describe('healthy responses are not mistaken for rate limits', () => {
+  it('accepts HTTP 200 with allowance remaining', async () => {
+    const { impl } = stubFetch(() =>
+      envelope(OK_BODY, {
+        headers: {
+          'content-type': 'application/json',
+          'x-ratelimit-requests-limit': '100',
+          'x-ratelimit-requests-remaining': '99',
+          'x-ratelimit-limit': '10',
+          'x-ratelimit-remaining': '9',
+        },
+      }),
+    );
+    const client = new ApiFootballClient({ apiKey: TEST_KEY, fetchImpl: impl, diagnostics: false });
+
+    const result = await client.get('fixtures', { date: '2026-08-15' });
+    assert.equal(result.response?.length, 1);
+    assert.equal(client.rateLimit()?.dailyRemaining, 99);
+  });
+
+  it('accepts HTTP 200 with an empty fixture list as a success with 0 fixtures', async () => {
+    const { impl } = stubFetch(() =>
+      envelope(
+        { get: 'fixtures', errors: [], results: 0, paging: { current: 1, total: 1 }, response: [] },
+        {
+          headers: {
+            'content-type': 'application/json',
+            'x-ratelimit-requests-remaining': '98',
+          },
+        },
+      ),
+    );
+    const client = new ApiFootballClient({ apiKey: TEST_KEY, fetchImpl: impl, diagnostics: false });
+
+    const result = await client.get('fixtures', { date: '2026-08-15' });
+    assert.deepEqual(result.response, [], 'an empty slate is a valid answer, not a failure');
+    assert.equal(client.lastResponse()?.outcome, 'SUCCESS');
+  });
+
+  it('accepts HTTP 200 when the provider sends no quota headers at all', async () => {
+    const { impl } = stubFetch(() => envelope(OK_BODY));
+    const client = new ApiFootballClient({ apiKey: TEST_KEY, fetchImpl: impl, diagnostics: false });
+
+    const result = await client.get('fixtures', {});
+    assert.equal(result.response?.length, 1, 'missing headers must never fail a request');
+    assert.equal(client.rateLimit()?.dailyRemaining, null);
+  });
+
+  it('returns the data on the call that spends the last request, then refuses the next', async () => {
+    // The response that empties the allowance was still paid for: its data is
+    // returned. Only the following request — which the provider would reject —
+    // is refused, and it is refused without a round trip.
+    const { impl, calls } = stubFetch(() =>
+      envelope(OK_BODY, {
+        headers: {
+          'content-type': 'application/json',
+          'x-ratelimit-requests-limit': '100',
+          'x-ratelimit-requests-remaining': '0',
+        },
+      }),
+    );
+    const client = new ApiFootballClient({ apiKey: TEST_KEY, fetchImpl: impl, diagnostics: false });
+
+    const first = await client.get('fixtures', {});
+    assert.equal(first.response?.length, 1, 'data already paid for is not thrown away');
+    assert.equal(calls.length, 1);
+
+    await assert.rejects(
+      () => client.get('fixtures', {}),
+      (error: unknown) => {
+        assert.ok(isSportsProviderError(error));
+        assert.equal(error.code, 'RATE_LIMITED');
+        assert.equal(error.retryable, true);
+        return true;
+      },
+    );
+    assert.equal(calls.length, 1, 'a request the provider would reject is not sent');
   });
 });
 
@@ -262,8 +402,96 @@ describe('provider behaviour without a key', () => {
   });
 });
 
-describe('provider fixture retrieval', () => {
-  it('normalises the payload and requests one league at a time', async () => {
+describe('low-cost fixture retrieval', () => {
+  /** One day's slate across many competitions, as the date endpoint returns it. */
+  function slate() {
+    const entry = (fixtureId: number, leagueId: number, name: string) => ({
+      fixture: {
+        id: fixtureId,
+        date: '2026-08-22T18:45:00+00:00',
+        status: { short: 'NS', elapsed: null },
+      },
+      league: { id: leagueId, name, country: 'World', season: 2026 },
+      teams: { home: { id: 10 + fixtureId, name: 'Home' }, away: { id: 20 + fixtureId, name: 'Away' } },
+      goals: { home: null, away: null },
+    });
+
+    return {
+      get: 'fixtures',
+      errors: [],
+      results: 4,
+      response: [
+        entry(1, 135, 'Serie A'),
+        entry(2, 39, 'Premier League'),
+        entry(3, 61, 'Ligue 1'),
+        entry(4, 998, 'Some Regional Cup'),
+      ],
+    };
+  }
+
+  it('spends one request for the whole slate and filters competitions locally', async () => {
+    const { impl, calls } = stubFetch(() => envelope(slate()));
+    const provider = new ApiFootballProvider({
+      apiKey: TEST_KEY,
+      fetchImpl: impl,
+      diagnostics: false,
+    });
+
+    const bundles = await provider.getFixtures({
+      date: '2026-08-22',
+      leagues: ['serie_a', 'premier_league', 'champions_league'],
+    });
+
+    assert.equal(calls.length, 1, 'the whole slate costs a single request');
+    assert.equal(provider.usage().reduce((total, row) => total + row.requests, 0), 1);
+
+    const url = new URL(calls[0]!.url);
+    assert.equal(url.searchParams.get('date'), '2026-08-22');
+    assert.equal(url.searchParams.get('league'), null, 'league must not be sent with date');
+    assert.equal(
+      url.searchParams.get('season'),
+      null,
+      'season alongside date is what the Free plan rejects',
+    );
+
+    assert.equal(bundles.length, 2, 'only the supported competitions are kept');
+    assert.deepEqual(
+      bundles.map((bundle) => bundle.fixture.id).sort(),
+      ['af-1', 'af-2'],
+    );
+  });
+
+  it('returns an empty list when the supported competitions are not playing', async () => {
+    const { impl, calls } = stubFetch(() =>
+      envelope({
+        get: 'fixtures',
+        errors: [],
+        results: 1,
+        response: [
+          {
+            fixture: { id: 9, date: '2026-08-22T18:45:00+00:00', status: { short: 'NS' } },
+            league: { id: 61, name: 'Ligue 1', country: 'France', season: 2026 },
+            teams: { home: { id: 1, name: 'A' }, away: { id: 2, name: 'B' } },
+            goals: { home: null, away: null },
+          },
+        ],
+      }),
+    );
+    const provider = new ApiFootballProvider({
+      apiKey: TEST_KEY,
+      fetchImpl: impl,
+      diagnostics: false,
+    });
+
+    const bundles = await provider.getFixtures({ date: '2026-08-22' });
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(bundles, [], 'a day with no supported fixtures is a success with 0 fixtures');
+  });
+
+  it('falls back to one request per competition for a date range', async () => {
+    // The range form of the endpoint requires league and season, so there is no
+    // cheaper way to ask for it.
     const { impl, calls } = stubFetch((url) => {
       const league = new URL(url).searchParams.get('league');
       return envelope({
@@ -285,16 +513,19 @@ describe('provider fixture retrieval', () => {
       });
     });
 
-    const provider = new ApiFootballProvider({ apiKey: TEST_KEY, fetchImpl: impl });
+    const provider = new ApiFootballProvider({
+      apiKey: TEST_KEY,
+      fetchImpl: impl,
+      diagnostics: false,
+    });
     const bundles = await provider.getFixtures({
-      date: '2026-08-22',
+      from: '2026-08-22',
+      to: '2026-08-24',
       leagues: ['serie_a', 'premier_league'],
     });
 
-    assert.equal(calls.length, 2, 'one request per configured competition');
+    assert.equal(calls.length, 2, 'one request per competition for a range');
     assert.equal(bundles.length, 2);
-    assert.equal(bundles[0]?.fixture.id, 'af-1');
-    assert.equal(bundles[0]?.fixture.status, 'scheduled');
-    assert.equal(provider.usage().reduce((total, row) => total + row.requests, 0), 2);
+    assert.match(calls[0]!.url, /season=2026/);
   });
 });

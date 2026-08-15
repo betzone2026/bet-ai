@@ -66,6 +66,37 @@ export interface ProviderUsage {
   requests: number;
 }
 
+/**
+ * Allowance the provider reported, split into the two limits every feed has:
+ * a daily quota and a shorter burst window. `null` means the provider did not
+ * say — which is not the same as zero, and must never be treated as zero.
+ */
+export interface ProviderQuotaSnapshot {
+  dailyLimit: number | null;
+  dailyRemaining: number | null;
+  burstLimit: number | null;
+  burstRemaining: number | null;
+}
+
+/**
+ * The last response, described in provider-agnostic terms.
+ *
+ * This is what makes "why did the sync fail?" answerable from the admin screen
+ * without opening a log: the status, the allowance, and the outcome that was
+ * derived from them.
+ */
+export interface ProviderResponseReport {
+  endpoint: string;
+  status: number | null;
+  /** `SUCCESS`, or the error code the call produced. */
+  outcome: string;
+  message: string | null;
+  resultCount: number | null;
+  snapshot: ProviderQuotaSnapshot;
+  observedAt: Date;
+}
+
+
 export interface SportsDataProvider {
   /** Stable identifier written onto every row this provider produces. */
   readonly name: string;
@@ -97,4 +128,11 @@ export interface SportsDataProvider {
 
   /** Requests consumed since this instance was created. */
   usage(): ProviderUsage[];
+
+  /**
+   * What the most recent response revealed about the allowance, when the
+   * adapter is able to say. Optional: a provider that exposes no quota
+   * information is still a valid provider.
+   */
+  lastResponse?(): ProviderResponseReport | null;
 }
