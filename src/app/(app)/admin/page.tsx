@@ -1,21 +1,30 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { count, desc, eq, ne, sum } from 'drizzle-orm';
 import { db } from '@/../db';
-import { profiles, simulationRuns, subscriptions, usageLogs } from '@/../db/schema';
+import { profiles, simulationRuns, sportsFixtures, subscriptions, usageLogs } from '@/../db/schema';
 import { getProfile } from '@/lib/auth/server';
 import { PageHeader } from '@/components/app/page-header';
 import { Stat } from '@/components/ui/stat';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
 import { PLANS } from '@/lib/config/plans';
-import { DEMO_MATCHES } from '@/lib/demo/matches';
 
 export const metadata: Metadata = { title: 'Admin' };
 export const dynamic = 'force-dynamic';
 
-const SECTIONS = [
-  'Users', 'Subscriptions', 'Sports', 'Leagues', 'Matches',
-  'Models', 'Monte Carlo', 'API usage', 'System logs', 'Settings',
+/** Sections of the internal console. Those already built link out. */
+const SECTIONS: Array<{ label: string; href?: string }> = [
+  { label: 'Users' },
+  { label: 'Subscriptions' },
+  { label: 'Sports data', href: '/admin/sports' },
+  { label: 'Leagues' },
+  { label: 'Matches' },
+  { label: 'Models' },
+  { label: 'Monte Carlo' },
+  { label: 'API usage', href: '/admin/sports' },
+  { label: 'System logs' },
+  { label: 'Settings' },
 ];
 
 interface Metrics {
@@ -25,7 +34,7 @@ interface Metrics {
   mrrCents: number;
   monteCarloRuns: number;
   aiQueries: number;
-  matches: number;
+  fixtures: number;
   recent: Array<typeof profiles.$inferSelect>;
 }
 
@@ -36,13 +45,14 @@ interface Metrics {
  */
 async function loadMetrics(): Promise<Metrics | null> {
   try {
-    const [users, active, trials, runs, byPlan, ai, recent] = await Promise.all([
+    const [users, active, trials, runs, byPlan, ai, fixtures, recent] = await Promise.all([
       db.select({ value: count() }).from(profiles),
       db.select({ value: count() }).from(subscriptions).where(eq(subscriptions.status, 'active')),
       db.select({ value: count() }).from(subscriptions).where(eq(subscriptions.status, 'trialing')),
       db.select({ value: count() }).from(simulationRuns),
       db.select({ plan: profiles.plan }).from(profiles).where(ne(profiles.plan, 'free')),
       db.select({ value: sum(usageLogs.usageCount) }).from(usageLogs).where(eq(usageLogs.feature, 'ai_query')),
+      db.select({ value: count() }).from(sportsFixtures),
       db.select().from(profiles).orderBy(desc(profiles.createdAt)).limit(8),
     ]);
 
@@ -58,7 +68,7 @@ async function loadMetrics(): Promise<Metrics | null> {
       mrrCents,
       monteCarloRuns: runs[0]?.value ?? 0,
       aiQueries: Number(ai[0]?.value ?? 0),
-      matches: DEMO_MATCHES.length,
+      fixtures: fixtures[0]?.value ?? 0,
       recent,
     };
   } catch {
@@ -97,7 +107,11 @@ export default async function AdminPage() {
             <Stat label="Trials" value={metrics.trials.toLocaleString('en-US')} />
             <Stat label="AI queries" value={metrics.aiQueries.toLocaleString('en-US')} hint="All time" />
             <Stat label="Monte Carlo runs" value={metrics.monteCarloRuns.toLocaleString('en-US')} />
-            <Stat label="Matches processed" value={metrics.matches.toLocaleString('en-US')} />
+            <Stat
+              label="Fixtures imported"
+              value={metrics.fixtures.toLocaleString('en-US')}
+              hint={metrics.fixtures === 0 ? 'Demo dataset in use' : 'Stored from the provider'}
+            />
             <Stat label="Churn" value="—" hint="Needs 30 days of billing history" />
           </div>
 
@@ -136,18 +150,29 @@ export default async function AdminPage() {
               </CardHeader>
               <CardBody>
                 <ul className="grid grid-cols-2 gap-2">
-                  {SECTIONS.map((section) => (
-                    <li
-                      key={section}
-                      className="rounded-lg border border-dashed border-line px-3 py-2 text-xs text-muted"
-                    >
-                      {section}
-                    </li>
-                  ))}
+                  {SECTIONS.map((section) =>
+                    section.href ? (
+                      <li key={section.label}>
+                        <Link
+                          href={section.href}
+                          className="block rounded-lg border border-alpha/35 bg-alpha/[0.06] px-3 py-2 text-xs text-alpha hover:border-alpha/60"
+                        >
+                          {section.label}
+                        </Link>
+                      </li>
+                    ) : (
+                      <li
+                        key={section.label}
+                        className="rounded-lg border border-dashed border-line px-3 py-2 text-xs text-muted"
+                      >
+                        {section.label}
+                      </li>
+                    ),
+                  )}
                 </ul>
                 <p className="mt-4 text-xs leading-relaxed text-muted">
-                  Each section gets its own table view once the sports-data feed is connected and
-                  there is something to administer.
+                  Sports data is live; the remaining sections get their own table view as the
+                  features behind them are built.
                 </p>
               </CardBody>
             </Card>
