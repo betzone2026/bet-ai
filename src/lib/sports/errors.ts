@@ -15,6 +15,14 @@ export type SportsErrorCode =
   | 'RATE_LIMITED'
   /** Non-2xx HTTP response. */
   | 'HTTP_ERROR'
+  /**
+   * The plan does not include the data that was asked for.
+   *
+   * Distinct from `RATE_LIMITED` on purpose: no amount of waiting turns a
+   * subscription into a different subscription, so this is not retryable and
+   * the operator needs to change the request, not the schedule.
+   */
+  | 'PLAN_RESTRICTED'
   /** 2xx response whose body reported an application-level error. */
   | 'PROVIDER_ERROR'
   /** Response was not the shape the adapter expects. */
@@ -22,7 +30,9 @@ export type SportsErrorCode =
   /** Request exceeded the client timeout or was aborted. */
   | 'TIMEOUT'
   /** Connection failed before a response arrived. */
-  | 'NETWORK_ERROR';
+  | 'NETWORK_ERROR'
+  /** The provider answered, but the rows could not be written. */
+  | 'DATABASE_ERROR';
 
 export class SportsProviderError extends Error {
   readonly code: SportsErrorCode;
@@ -71,6 +81,42 @@ export class SportsProviderError extends Error {
 
 export function isSportsProviderError(error: unknown): error is SportsProviderError {
   return error instanceof SportsProviderError;
+}
+
+/**
+ * HTTP status to answer with when a sync fails.
+ *
+ * A blanket 502 tells an admin nothing: a missing key, a spent quota and a
+ * plan restriction all need different actions, and the status code is the first
+ * thing anyone reads. Only genuinely unclassified provider trouble stays 502.
+ */
+export function httpStatusForCode(code: SportsErrorCode | null): number {
+  switch (code) {
+    case 'MISSING_API_KEY':
+      return 503;
+    case 'AUTH_FAILED':
+      return 401;
+    case 'RATE_LIMITED':
+      return 429;
+    case 'PLAN_RESTRICTED':
+      return 422;
+    case 'TIMEOUT':
+      return 504;
+    case 'NETWORK_ERROR':
+      return 503;
+    case 'DATABASE_ERROR':
+      return 500;
+    default:
+      return 502;
+  }
+}
+
+const SUMMARY_CODE = /^\[([A-Z_]+)\]/;
+
+/** Recovers the code from a stored summary line written by `toSummary()`. */
+export function codeFromSummary(summary: string | null | undefined): SportsErrorCode | null {
+  const match = summary ? SUMMARY_CODE.exec(summary) : null;
+  return match ? (match[1] as SportsErrorCode) : null;
 }
 
 /**

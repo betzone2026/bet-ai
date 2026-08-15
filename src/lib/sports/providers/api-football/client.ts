@@ -10,16 +10,50 @@
  * never leaves this module: it is not returned, not logged, and not included in
  * any error message. Errors carry the endpoint and status instead, which is
  * what an operator actually needs.
+ *
+ * Quota interpretation lives entirely in `./rate-limit.ts`. This file asks that
+ * module the questions and never re-implements the answers, so there is exactly
+ * one definition of "rate limited" no matter which endpoint is being called.
  */
 
 import { serverEnv } from '../../../env.ts';
 import { PROVIDER_TIMEOUT_MS } from '../../config.ts';
-import { SportsProviderError } from '../../errors.ts';
+import { SportsProviderError, type SportsErrorCode } from '../../errors.ts';
 import { redactValue, sportsLog } from '../../logging.ts';
+import {
+  LOW_QUOTA_THRESHOLD,
+  UNKNOWN_RATE_LIMIT,
+  classifyEnvelopeError,
+  isActuallyRateLimited,
+  parseRateLimitHeaders,
+  secondsUntilUtcMidnight,
+  type RateLimitSnapshot,
+} from './rate-limit.ts';
 import type { ApiFootballEnvelope } from './types.ts';
 
 export const API_FOOTBALL_PROVIDER = 'api-football';
 const DEFAULT_BASE_URL = 'https://v3.football.api-sports.io';
+
+/** How long a spent per-minute allowance is assumed to stay spent. */
+const BURST_WINDOW_MS = 60_000;
+
+export type { RateLimitSnapshot } from './rate-limit.ts';
+
+/**
+ * Everything one request revealed, in a form the quota tracker and the admin
+ * screen can both consume without knowing anything about HTTP.
+ */
+export interface QuotaObservation {
+  endpoint: string;
+  status: number | null;
+  snapshot: RateLimitSnapshot;
+  /** `SUCCESS`, or the code the call failed with. */
+  outcome: 'SUCCESS' | SportsErrorCode;
+  message: string | null;
+  /** Entries in the response array, when there was one. */
+  resultCount: number | null;
+  observedAt: Date;
+}
 
 export interface ApiFootballClientOptions {
   /** Overrides the environment. Used by tests; production leaves it unset. */
@@ -29,15 +63,15 @@ export interface ApiFootballClientOptions {
   fetchImpl?: typeof fetch;
   /** Called once per HTTP request so the quota tracker can record it. */
   onRequest?: (endpoint: string) => void;
-}
-
-export interface RateLimitSnapshot {
-  /** Requests allowed on the current plan, per day. */
-  dailyLimit: number | null;
-  dailyRemaining: number | null;
-  /** Per-minute burst allowance. */
-  minuteLimit: number | null;
-  minuteRemaining: number | null;
+  /** Called after every response, successful or not. */
+  onQuota?: (observation: QuotaObservation) => void;
+  /**
+   * Emits one structured line per response: status, both header pairs, the
+   * envelope's `errors` and its result count. On by default — this is the
+   * information that was missing when a healthy 200 was being reported as a
+   * rate limit — and never includes the key. Tests turn it off for quiet output.
+   */
+  diagnostics?: boolean;
 }
 
 /**
@@ -65,8 +99,15 @@ export class ApiFootballClient {
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly onRequest: ((endpoint: string) => void) | undefined;
+  private readonly onQuota: ((observation: QuotaObservation) => void) | undefined;
+  private readonly diagnostics: boolean;
   private readonly requestCounts = new Map<string, number>();
   private lastRateLimit: RateLimitSnapshot | null = null;
+  private lastObservation: QuotaObservation | null = null;
+  /** UTC day on which the daily allowance was observed at zero. */
+  private exhaustedOnUtcDay: string | null = null;
+  /** When the per-minute allowance was last observed at zero. */
+  private burstExhaustedAt: number | null = null;
 
   constructor(options: ApiFootballClientOptions = {}) {
     this.apiKey = options.apiKey === undefined ? readApiKey() : (options.apiKey?.trim() || null);
@@ -74,6 +115,8 @@ export class ApiFootballClient {
     this.timeoutMs = options.timeoutMs ?? PROVIDER_TIMEOUT_MS;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.onRequest = options.onRequest;
+    this.onQuota = options.onQuota;
+    this.diagnostics = options.diagnostics ?? true;
   }
 
   isConfigured(): boolean {
@@ -88,6 +131,11 @@ export class ApiFootballClient {
   /** What the provider reported about the quota on the most recent response. */
   rateLimit(): RateLimitSnapshot | null {
     return this.lastRateLimit;
+  }
+
+  /** The most recent response in full, for the admin screen and the quota table. */
+  lastResponse(): QuotaObservation | null {
+    return this.lastObservation;
   }
 
   /**
@@ -107,6 +155,8 @@ export class ApiFootballClient {
         endpoint,
       });
     }
+
+    this.assertQuotaAvailable(endpoint);
 
     const url = new URL(`${this.baseUrl}/${endpoint.replace(/^\/+/, '')}`);
     for (const [key, value] of Object.entries(params)) {
@@ -128,73 +178,234 @@ export class ApiFootballClient {
       });
     } catch (cause) {
       const aborted = cause instanceof Error && /abort|timeout/i.test(cause.name + cause.message);
-      throw new SportsProviderError(
+      const error = new SportsProviderError(
         aborted ? 'TIMEOUT' : 'NETWORK_ERROR',
         aborted
           ? `Request to ${endpoint} exceeded ${this.timeoutMs}ms.`
           : `Request to ${endpoint} failed before a response arrived.`,
         { provider: API_FOOTBALL_PROVIDER, endpoint, cause },
       );
+      this.observe({
+        endpoint,
+        status: null,
+        snapshot: UNKNOWN_RATE_LIMIT,
+        outcome: error.code,
+        message: error.message,
+        resultCount: null,
+      });
+      throw error;
     }
 
-    this.lastRateLimit = readRateLimit(response.headers);
+    const snapshot = parseRateLimitHeaders(response);
+    this.lastRateLimit = snapshot;
 
     if (!response.ok) {
-      throw this.httpError(response, endpoint);
+      const error = this.httpError(response, endpoint, snapshot);
+      this.observe({
+        endpoint,
+        status: response.status,
+        snapshot,
+        outcome: error.code,
+        message: error.message,
+        resultCount: null,
+      });
+      throw error;
     }
 
     let envelope: ApiFootballEnvelope<T>;
     try {
       envelope = (await response.json()) as ApiFootballEnvelope<T>;
     } catch (cause) {
-      throw new SportsProviderError(
+      const error = new SportsProviderError(
         'INVALID_RESPONSE',
         `${endpoint} returned a body that is not JSON.`,
         { provider: API_FOOTBALL_PROVIDER, endpoint, status: response.status, cause },
       );
+      this.observe({
+        endpoint,
+        status: response.status,
+        snapshot,
+        outcome: error.code,
+        message: error.message,
+        resultCount: null,
+      });
+      throw error;
     }
 
     const providerError = describeEnvelopeErrors(envelope.errors);
+    this.logDiagnostics(endpoint, response.status, snapshot, envelope, providerError?.message);
+
     if (providerError) {
-      throw new SportsProviderError(
-        classifyProviderError(providerError.fields),
+      // The decision that used to be wrong. `errors.plan` is a capability
+      // complaint and `errors.requests` is a spent allowance; only the latter,
+      // or a counter that actually reads zero, is a rate limit.
+      const { code, retryAfterSeconds } = classifyEnvelopeError({
+        fields: providerError.fields,
+        message: providerError.message,
+        status: response.status,
+        snapshot,
+      });
+
+      const error = new SportsProviderError(
+        code,
         this.safe(`${endpoint} rejected the request: ${providerError.message}`),
-        { provider: API_FOOTBALL_PROVIDER, endpoint, status: response.status },
+        {
+          provider: API_FOOTBALL_PROVIDER,
+          endpoint,
+          status: response.status,
+          retryAfterSeconds,
+        },
       );
+      if (code === 'RATE_LIMITED') this.markExhausted(snapshot);
+      this.observe({
+        endpoint,
+        status: response.status,
+        snapshot,
+        outcome: code,
+        message: error.message,
+        resultCount: null,
+      });
+      throw error;
     }
 
     if (!Array.isArray(envelope.response)) {
-      throw new SportsProviderError(
+      const error = new SportsProviderError(
         'INVALID_RESPONSE',
         `${endpoint} returned an envelope without a response array.`,
         { provider: API_FOOTBALL_PROVIDER, endpoint, status: response.status },
       );
+      this.observe({
+        endpoint,
+        status: response.status,
+        snapshot,
+        outcome: error.code,
+        message: error.message,
+        resultCount: null,
+      });
+      throw error;
     }
 
-    if (this.lastRateLimit?.dailyRemaining !== null && this.lastRateLimit?.dailyRemaining !== undefined) {
-      if (this.lastRateLimit.dailyRemaining <= 10) {
-        sportsLog.warn('provider daily quota nearly exhausted', {
-          endpoint,
-          remaining: this.lastRateLimit.dailyRemaining,
-        });
-      }
-    }
+    // A successful call that happened to spend the last of the allowance is
+    // still a successful call. The counters are remembered so the *next*
+    // request can be refused without a round trip, but this response — already
+    // paid for — is returned in full. Rejecting it would throw away data the
+    // quota has already been charged for, which is exactly the false positive
+    // this module was written to end. An empty array is likewise a valid
+    // answer: zero fixtures today is a fact, not a failure.
+    this.markExhausted(snapshot);
+    this.warnOnLowQuota(endpoint, snapshot);
+    this.observe({
+      endpoint,
+      status: response.status,
+      snapshot,
+      outcome: 'SUCCESS',
+      message: null,
+      resultCount: envelope.response.length,
+    });
 
     return envelope;
   }
 
-  private httpError(response: Response, endpoint: string): SportsProviderError {
-    const retryAfter = Number(response.headers.get('retry-after'));
+  /**
+   * Refuses a request the provider is certain to reject.
+   *
+   * Only a *measured* zero blocks: an unknown allowance is allowed through,
+   * because the request is how it gets measured.
+   */
+  private assertQuotaAvailable(endpoint: string): void {
+    if (this.exhaustedOnUtcDay !== null && this.exhaustedOnUtcDay === utcDay(new Date())) {
+      throw new SportsProviderError(
+        'RATE_LIMITED',
+        `${endpoint} was not attempted: the daily request allowance is spent.`,
+        {
+          provider: API_FOOTBALL_PROVIDER,
+          endpoint,
+          retryAfterSeconds: secondsUntilUtcMidnight(),
+        },
+      );
+    }
+
+    if (this.burstExhaustedAt !== null) {
+      const elapsed = Date.now() - this.burstExhaustedAt;
+      if (elapsed < BURST_WINDOW_MS) {
+        throw new SportsProviderError(
+          'RATE_LIMITED',
+          `${endpoint} was not attempted: the per-minute allowance is spent.`,
+          {
+            provider: API_FOOTBALL_PROVIDER,
+            endpoint,
+            retryAfterSeconds: Math.ceil((BURST_WINDOW_MS - elapsed) / 1000),
+          },
+        );
+      }
+      this.burstExhaustedAt = null;
+    }
+  }
+
+  /** Remembers a counter that reached zero so the next call can be skipped. */
+  private markExhausted(snapshot: RateLimitSnapshot): void {
+    if (snapshot.dailyRemaining === 0) this.exhaustedOnUtcDay = utcDay(new Date());
+    if (snapshot.burstRemaining === 0) this.burstExhaustedAt = Date.now();
+  }
+
+  private warnOnLowQuota(endpoint: string, snapshot: RateLimitSnapshot): void {
+    if (snapshot.dailyRemaining !== null && snapshot.dailyRemaining <= LOW_QUOTA_THRESHOLD) {
+      sportsLog.warn('provider daily quota nearly exhausted', {
+        endpoint,
+        remaining: snapshot.dailyRemaining,
+        limit: snapshot.dailyLimit,
+      });
+    }
+  }
+
+  /**
+   * One line per response, carrying exactly what was missing while a healthy
+   * 200 was being read as a rate limit — and nothing that could identify the
+   * key. The envelope's `errors` are included verbatim after redaction because
+   * their *shape* is the whole diagnosis.
+   */
+  private logDiagnostics(
+    endpoint: string,
+    status: number,
+    snapshot: RateLimitSnapshot,
+    envelope: ApiFootballEnvelope<unknown>,
+    errorMessage: string | undefined,
+  ): void {
+    if (!this.diagnostics) return;
+
+    sportsLog.info('provider response', {
+      endpoint,
+      status,
+      dailyLimit: snapshot.dailyLimit,
+      dailyRemaining: snapshot.dailyRemaining,
+      burstLimit: snapshot.burstLimit,
+      burstRemaining: snapshot.burstRemaining,
+      results: envelope.results ?? null,
+      returned: Array.isArray(envelope.response) ? envelope.response.length : null,
+      errors: errorMessage ? this.safe(errorMessage) : null,
+    });
+  }
+
+  private observe(observation: Omit<QuotaObservation, 'observedAt'>): void {
+    const full: QuotaObservation = { ...observation, observedAt: new Date() };
+    this.lastObservation = full;
+    this.onQuota?.(full);
+  }
+
+  private httpError(
+    response: Response,
+    endpoint: string,
+    snapshot: RateLimitSnapshot,
+  ): SportsProviderError {
+    const retryAfterSeconds = readRetryAfter(response);
     const base = {
       provider: API_FOOTBALL_PROVIDER,
       endpoint,
       status: response.status,
-      retryAfterSeconds: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+      retryAfterSeconds,
     };
 
-    if (response.status === 429) {
-      return new SportsProviderError('RATE_LIMITED', `${endpoint} hit the provider rate limit.`, base);
-    }
+    // Credentials first: a 401/403 is about the key, whatever the counters say.
     if (response.status === 401 || response.status === 403) {
       return new SportsProviderError(
         'AUTH_FAILED',
@@ -202,6 +413,16 @@ export class ApiFootballClient {
         base,
       );
     }
+
+    const verdict = isActuallyRateLimited({ status: response.status, snapshot, retryAfterSeconds });
+    if (verdict.limited) {
+      this.markExhausted(snapshot);
+      return new SportsProviderError('RATE_LIMITED', `${endpoint} hit the provider rate limit.`, {
+        ...base,
+        retryAfterSeconds: verdict.retryAfterSeconds,
+      });
+    }
+
     return new SportsProviderError(
       'HTTP_ERROR',
       `${endpoint} returned HTTP ${response.status}.`,
@@ -215,25 +436,20 @@ export class ApiFootballClient {
   }
 }
 
-function readRateLimit(headers: Headers): RateLimitSnapshot {
-  const toNumber = (value: string | null): number | null => {
-    if (value === null) return null;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  };
+function readRetryAfter(response: Response): number | null {
+  const value = Number(response.headers.get('retry-after'));
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
 
-  return {
-    dailyLimit: toNumber(headers.get('x-ratelimit-requests-limit')),
-    dailyRemaining: toNumber(headers.get('x-ratelimit-requests-remaining')),
-    minuteLimit: toNumber(headers.get('x-ratelimit-limit')),
-    minuteRemaining: toNumber(headers.get('x-ratelimit-remaining')),
-  };
+function utcDay(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 /**
  * The v3 API answers `200 OK` with a populated `errors` object for application
- * failures — a dead key, an exhausted plan — so a successful HTTP status is not
- * a successful call.
+ * failures — a dead key, a season outside the plan, an exhausted allowance — so
+ * a successful HTTP status is not by itself a successful call. An `errors` that
+ * is an empty array, which is what a healthy response carries, is not an error.
  */
 function describeEnvelopeErrors(
   errors: ApiFootballEnvelope<unknown>['errors'],
@@ -251,12 +467,4 @@ function describeEnvelopeErrors(
     fields: entries.map(([field]) => field.toLowerCase()),
     message: entries.map(([field, value]) => `${field}: ${value}`).join('; '),
   };
-}
-
-function classifyProviderError(fields: string[]) {
-  if (fields.some((field) => field === 'token' || field === 'access')) return 'AUTH_FAILED' as const;
-  if (fields.some((field) => field === 'requests' || field === 'ratelimit' || field === 'plan')) {
-    return 'RATE_LIMITED' as const;
-  }
-  return 'PROVIDER_ERROR' as const;
 }

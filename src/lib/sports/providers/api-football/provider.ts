@@ -71,6 +71,11 @@ function requireProviderId(id: string, what: string): string {
   return providerId;
 }
 
+/** `YYYY-MM-DD` in UTC, the only date format the endpoint accepts. */
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
 export class ApiFootballProvider implements SportsDataProvider {
   readonly name = API_FOOTBALL_PROVIDER;
   private readonly client: ApiFootballClient;
@@ -92,6 +97,11 @@ export class ApiFootballProvider implements SportsDataProvider {
     return this.client.rateLimit();
   }
 
+  /** Everything the last response revealed, for the quota tracker. */
+  lastResponse() {
+    return this.client.lastResponse();
+  }
+
   async getLeagues(): Promise<League[]> {
     const leagues: League[] = [];
     for (const key of SUPPORTED_LEAGUE_KEYS) {
@@ -107,29 +117,79 @@ export class ApiFootballProvider implements SportsDataProvider {
   }
 
   /**
-   * One request per competition.
+   * One request for the whole day, filtered locally.
    *
-   * The endpoint accepts a single `league`, so the supported slate costs three
-   * requests per day rather than one. That is the price of not importing the
-   * whole world, and it is the cheaper side of the trade.
+   * `fixtures?date=` returns every competition playing on that date, so asking
+   * for it once and discarding the competitions we do not follow costs a single
+   * request instead of one per league. On a 100-request Free plan that is the
+   * difference between a sync costing 3% of the day's allowance and 1%.
+   *
+   * It is also the only shape that works: `season` and `date` together are
+   * rejected on the Free plan, because the plan's seasons and the plan's date
+   * window do not overlap. The date-only form has neither problem.
+   *
+   * A date range is the exception — that form of the endpoint requires `league`
+   * and `season`, so it falls back to one request per competition.
    */
   async getFixtures(query: FixtureQuery): Promise<FixtureBundle[]> {
     const leagues = query.leagues?.length ? query.leagues : SUPPORTED_LEAGUE_KEYS;
-    const referenceDate = query.date ? new Date(`${query.date}T12:00:00Z`) : new Date();
+
+    const wanted = new Map<string, LeagueKey>();
+    for (const key of leagues) {
+      const id = providerLeagueId(key, this.name);
+      if (id) wanted.set(id, key);
+    }
+    if (wanted.size === 0) return [];
+
+    if (query.from || query.to) {
+      return this.getFixturesByLeague(query, [...wanted.keys()]);
+    }
+
+    return this.getFixturesByDate(query.date ?? isoDate(new Date()), wanted);
+  }
+
+  /** The low-cost path: one call, local filtering. */
+  private async getFixturesByDate(
+    date: string,
+    wanted: Map<string, LeagueKey>,
+  ): Promise<FixtureBundle[]> {
+    const envelope = await this.client.get<ApiFootballFixtureEntry>('fixtures', { date });
+    const observedAt = new Date();
+    const bundles: FixtureBundle[] = [];
+
+    for (const entry of envelope.response ?? []) {
+      const leagueId = entry.league?.id;
+      if (leagueId === null || leagueId === undefined) continue;
+      if (!wanted.has(String(leagueId))) continue;
+
+      const bundle = mapFixtureBundle(entry, observedAt);
+      if (bundle) bundles.push(bundle);
+      if (bundles.length >= MAX_FIXTURES_PER_SYNC) return bundles;
+    }
+
+    return bundles;
+  }
+
+  /** Range queries: one request per competition, as the endpoint demands. */
+  private async getFixturesByLeague(
+    query: FixtureQuery,
+    leagueIds: string[],
+  ): Promise<FixtureBundle[]> {
+    const referenceDate = query.from
+      ? new Date(`${query.from}T12:00:00Z`)
+      : query.date
+        ? new Date(`${query.date}T12:00:00Z`)
+        : new Date();
     const season = query.season ?? seasonForDate(referenceDate);
     const observedAt = new Date();
     const bundles: FixtureBundle[] = [];
 
-    for (const key of leagues) {
-      const leagueId = providerLeagueId(key, this.name);
-      if (!leagueId) continue;
-
+    for (const leagueId of leagueIds) {
       const envelope = await this.client.get<ApiFootballFixtureEntry>('fixtures', {
         league: leagueId,
         season,
-        date: query.from ? undefined : query.date,
         from: query.from,
-        to: query.to,
+        to: query.to ?? query.from,
       });
 
       for (const entry of envelope.response ?? []) {

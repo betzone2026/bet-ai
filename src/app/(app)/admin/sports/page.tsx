@@ -19,11 +19,29 @@ function when(value: Date | null): string {
   return value.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+/**
+ * Renders a counter the provider may not have sent.
+ *
+ * `—` means the provider did not say, which is deliberately different from `0`.
+ * Showing an unknown allowance as zero would read as "quota spent" on a key
+ * that has never been used.
+ */
+function counter(value: number | null): string {
+  return value === null ? '—' : value.toLocaleString('en-US');
+}
+
 export default async function AdminSportsPage() {
   const profile = await getProfile();
   if (!profile?.is_admin) redirect('/dashboard');
 
   const status = await getSportsDataStatus();
+  const { quota } = status;
+
+  const syncDisabledReason = !status.apiConfigured
+    ? 'No provider key is configured.'
+    : status.quotaState === 'EXHAUSTED'
+      ? 'The daily request allowance is spent. It resets at 00:00 UTC.'
+      : undefined;
 
   return (
     <>
@@ -36,7 +54,12 @@ export default async function AdminSportsPage() {
         eyebrow="Internal"
         title="Sports data"
         description="State of the ingestion pipeline: what is configured, what was imported, and what it cost."
-        actions={<SyncNowButton disabled={!status.apiConfigured} />}
+        actions={
+          <SyncNowButton
+            disabled={!status.canSync}
+            {...(syncDisabledReason ? { disabledReason: syncDisabledReason } : {})}
+          />
+        }
       />
 
       {!status.apiConfigured && (
@@ -49,6 +72,32 @@ export default async function AdminSportsPage() {
             Set <code className="font-mono text-xs">API_FOOTBALL_KEY</code> under Site configuration
             → Environment variables to enable imports. The application keeps running on the demo
             dataset until it is present; no request is attempted without it.
+          </p>
+        </div>
+      )}
+
+      {status.apiConfigured && status.quotaState === 'EXHAUSTED' && (
+        <div className="mb-6 rounded-xl border border-down/30 bg-down/[0.06] px-5 py-4">
+          <p className="eyebrow text-down">Quota exhausted</p>
+          <h2 className="mt-1 font-display text-base font-semibold">
+            No requests left today
+          </h2>
+          <p className="mt-1 text-sm text-muted">
+            The provider reports 0 of {counter(quota.dailyLimit)} daily requests remaining. Sync is
+            disabled until the allowance resets at 00:00 UTC; stored fixtures continue to be served.
+          </p>
+        </div>
+      )}
+
+      {status.apiConfigured && status.quotaState === 'LOW' && (
+        <div className="mb-6 rounded-xl border border-alpha/30 bg-alpha/[0.06] px-5 py-4">
+          <p className="eyebrow text-alpha">Quota running low</p>
+          <h2 className="mt-1 font-display text-base font-semibold">
+            {counter(quota.dailyRemaining)} of {counter(quota.dailyLimit)} daily requests left
+          </h2>
+          <p className="mt-1 text-sm text-muted">
+            A fixtures sync costs one request. Detail syncs — standings, statistics, lineups,
+            injuries, odds — are charged per fixture, so run them sparingly until the reset.
           </p>
         </div>
       )}
@@ -73,6 +122,67 @@ export default async function AdminSportsPage() {
           hint={status.hasRealData ? 'Fixtures are served from the database' : 'No fixtures stored yet'}
         />
       </section>
+
+      <section className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat
+          label="Daily API limit"
+          value={counter(quota.dailyLimit)}
+          hint="Requests the plan allows per day"
+        />
+        <Stat
+          label="Daily remaining"
+          value={counter(quota.dailyRemaining)}
+          accent={status.quotaState === 'OK'}
+          hint={
+            status.quotaState === 'UNKNOWN'
+              ? 'Not yet reported by the provider'
+              : `Resets at 00:00 UTC · read ${when(quota.observedAt)}`
+          }
+        />
+        <Stat
+          label="Burst limit / minute"
+          value={counter(quota.burstLimit)}
+          hint="Requests allowed inside one minute"
+        />
+        <Stat
+          label="Burst remaining"
+          value={counter(quota.burstRemaining)}
+          hint="Refills every minute"
+        />
+      </section>
+
+      <section className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Stat
+          label="Last API response"
+          value={
+            quota.lastOutcome
+              ? `${quota.lastStatus ?? '—'} ${quota.lastOutcome}`
+              : 'none yet'
+          }
+          accent={quota.lastOutcome === 'SUCCESS'}
+          hint={
+            quota.lastEndpoint
+              ? `${quota.lastEndpoint} · ${quota.lastResultCount ?? 0} results · ${when(quota.observedAt)}`
+              : 'No provider call has been made'
+          }
+        />
+        <Stat
+          label="Last sync status"
+          value={status.lastSync?.status ?? 'none yet'}
+          accent={status.lastSync?.status === 'completed'}
+          hint={
+            status.lastSync
+              ? `${status.lastSync.syncType} · ${when(status.lastSync.completedAt ?? status.lastSync.startedAt)}`
+              : 'No sync has been attempted'
+          }
+        />
+      </section>
+
+      {quota.lastOutcome && quota.lastOutcome !== 'SUCCESS' && quota.lastMessage && (
+        <p className="mt-3 rounded-xl border border-down/30 bg-down/[0.05] px-4 py-3 text-xs leading-relaxed text-down">
+          <span className="font-mono">{quota.lastOutcome}</span> — {quota.lastMessage}
+        </p>
+      )}
 
       <section className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Fixtures" value={status.counts.fixtures.toLocaleString('en-US')} />
@@ -235,9 +345,11 @@ export default async function AdminSportsPage() {
       </Card>
 
       <p className="mt-6 rounded-xl border border-line bg-surface/50 px-4 py-3 text-xs leading-relaxed text-muted">
-        A sync is the only action in the product that reaches the provider. Requests are counted per
-        endpoint, and a run is skipped when stored data is still inside its refresh window — press
-        Sync now to override that and fetch regardless.
+        A sync is the only action in the product that reaches the provider. A fixtures sync costs a
+        single request: the day&rsquo;s whole slate is fetched once and the supported competitions
+        are filtered locally. Standings, statistics, lineups, injuries and odds are never fetched
+        automatically — they are separate syncs, charged per fixture. A run is skipped when stored
+        data is still inside its refresh window; press Sync now to override that and fetch regardless.
       </p>
     </>
   );

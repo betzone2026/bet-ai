@@ -15,6 +15,7 @@ import {
   sportsTeams,
 } from '@/../db/schema';
 import { DEFAULT_PROVIDER, SUPPORTED_LEAGUE_KEYS } from './config.ts';
+import { quotaState, readProviderQuota, type ProviderQuota, type QuotaState } from './quota.ts';
 import { isProviderConfigured } from './registry.ts';
 import { lastSyncRun, recentSyncRuns, type SyncRunRow } from './sync/runs.ts';
 import type { DataQualityStatus } from './types.ts';
@@ -27,8 +28,15 @@ export interface SportsDataStatus {
   supportedLeagues: string[];
   lastSuccessfulSync: SyncRunRow | null;
   lastFailedSync: SyncRunRow | null;
+  /** Most recent run of any outcome, which is what "last sync status" means. */
+  lastSync: SyncRunRow | null;
   recentRuns: SyncRunRow[];
   requestsToday: number;
+  /** Latest allowance reported by the provider itself. */
+  quota: ProviderQuota;
+  quotaState: QuotaState;
+  /** False only when the allowance is measured at zero. */
+  canSync: boolean;
   counts: {
     fixtures: number;
     teams: number;
@@ -40,6 +48,20 @@ export interface SportsDataStatus {
   hasRealData: boolean;
 }
 
+const UNKNOWN_QUOTA: ProviderQuota = {
+  provider: DEFAULT_PROVIDER,
+  dailyLimit: null,
+  dailyRemaining: null,
+  burstLimit: null,
+  burstRemaining: null,
+  lastStatus: null,
+  lastEndpoint: null,
+  lastOutcome: null,
+  lastMessage: null,
+  lastResultCount: null,
+  observedAt: null,
+};
+
 /** Empty status used when the database itself is unreachable. */
 function emptyStatus(apiConfigured: boolean): SportsDataStatus {
   return {
@@ -48,8 +70,14 @@ function emptyStatus(apiConfigured: boolean): SportsDataStatus {
     supportedLeagues: [...SUPPORTED_LEAGUE_KEYS],
     lastSuccessfulSync: null,
     lastFailedSync: null,
+    lastSync: null,
     recentRuns: [],
     requestsToday: 0,
+    quota: UNKNOWN_QUOTA,
+    quotaState: 'UNKNOWN',
+    // An unreadable database says nothing about the provider's allowance, and
+    // guessing "exhausted" would disable the one control that could fix things.
+    canSync: apiConfigured,
     counts: { fixtures: 0, teams: 0, leagues: 0, oddsSnapshots: 0 },
     qualityAlerts: [],
     hasRealData: false,
@@ -60,7 +88,7 @@ export async function getSportsDataStatus(): Promise<SportsDataStatus> {
   const apiConfigured = isProviderConfigured();
 
   try {
-    const [fixtures, teams, leagues, odds, quality, success, failure, recent, requests] =
+    const [fixtures, teams, leagues, odds, quality, success, failure, recent, requests, quota] =
       await Promise.all([
         db.select({ value: count() }).from(sportsFixtures),
         db.select({ value: count() }).from(sportsTeams),
@@ -74,9 +102,11 @@ export async function getSportsDataStatus(): Promise<SportsDataStatus> {
         lastSyncRun('failed'),
         recentSyncRuns(8),
         requestsToday(DEFAULT_PROVIDER),
+        readProviderQuota(DEFAULT_PROVIDER),
       ]);
 
     const fixtureCount = fixtures[0]?.value ?? 0;
+    const state = quotaState(quota);
 
     return {
       provider: DEFAULT_PROVIDER,
@@ -84,8 +114,12 @@ export async function getSportsDataStatus(): Promise<SportsDataStatus> {
       supportedLeagues: [...SUPPORTED_LEAGUE_KEYS],
       lastSuccessfulSync: success,
       lastFailedSync: failure,
+      lastSync: recent[0] ?? null,
       recentRuns: recent,
       requestsToday: requests,
+      quota,
+      quotaState: state,
+      canSync: apiConfigured && state !== 'EXHAUSTED',
       counts: {
         fixtures: fixtureCount,
         teams: teams[0]?.value ?? 0,
