@@ -34,6 +34,18 @@ export const serverEnv = {
   get anthropicApiKey() {
     return required('ANTHROPIC_API_KEY', process.env.ANTHROPIC_API_KEY);
   },
+  /**
+   * Sports feed credential. Server-side only — there is deliberately no
+   * `NEXT_PUBLIC_` counterpart, and nothing in the browser bundle may read it.
+   *
+   * Unlike the keys above this one does not throw when absent: the app is
+   * expected to run without a sports feed, falling back to the demo dataset
+   * while the admin screen reports "API not configured".
+   */
+  get apiFootballKey(): string | null {
+    const value = process.env.API_FOOTBALL_KEY;
+    return value && value.trim() !== '' ? value.trim() : null;
+  },
   priceIdFor(envKey: string): string {
     return required(envKey, process.env[envKey]);
   },
