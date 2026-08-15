@@ -39,6 +39,17 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
+  // Allow-list by omission: only these prefixes are gated, so every other route
+  // — `/`, `/login`, `/register`, `/reset-password`, `/accept-invite` and above
+  // all `/auth/callback` — is public and never sees this function.
+  //
+  // `/auth/callback` being public is what makes email confirmation work at all.
+  // It runs before any session exists, so gating it would bounce the user to
+  // `/login` while the single-use token in the fragment went unredeemed.
+  //
+  // Kept as a literal because Next.js requires a statically analysable matcher.
+  // `PROTECTED_PREFIXES` in `src/lib/auth/route-access.ts` mirrors this list and
+  // a test asserts the two are identical.
   matcher: [
     '/dashboard',
     '/dashboard/:path*',
