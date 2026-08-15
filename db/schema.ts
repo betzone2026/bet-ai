@@ -12,6 +12,7 @@ import {
   timestamp,
   unique,
 } from 'drizzle-orm/pg-core';
+import type { SeasonCoverage } from '../src/lib/sports/provider.ts';
 import type {
   DataQualityIssue,
   FixtureStatus,
@@ -379,9 +380,22 @@ export const sportsSyncRuns = pgTable(
     startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     status: syncRunStatus().notNull().default('running'),
+    /**
+     * Entries the provider sent, before the supported-competition filter.
+     *
+     * Stored beside `records_matched` because their difference is the only
+     * durable evidence that separates "nothing was played" from "the configured
+     * league ids are wrong" — a distinction that is impossible to reconstruct
+     * later from a single count of what was imported.
+     */
+    providerReturned: integer('provider_returned').notNull().default(0),
+    /** Entries that belonged to a configured competition. */
+    recordsMatched: integer('records_matched').notNull().default(0),
     recordsReceived: integer('records_received').notNull().default(0),
     recordsInserted: integer('records_inserted').notNull().default(0),
     recordsUpdated: integer('records_updated').notNull().default(0),
+    /** Rows that arrived identical to what was stored, so nothing was written. */
+    recordsUnchanged: integer('records_unchanged').notNull().default(0),
     recordsFailed: integer('records_failed').notNull().default(0),
     apiRequests: integer('api_requests').notNull().default(0),
     errorSummary: text('error_summary'),
@@ -440,4 +454,41 @@ export const sportsProviderQuota = pgTable('sports_provider_quota', {
   lastResultCount: integer('last_result_count'),
   observedAt: timestamp('observed_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * What the provider says it covers, per configured competition.
+ *
+ * Written by the season diagnostic rather than assumed by the code. The
+ * alternative — hardcoding "the Free plan only serves 2022-2024" — is a
+ * constant that is wrong the moment the plan changes, and wrong silently: every
+ * sync keeps succeeding while importing nothing. Storing the provider's own
+ * answer means the assumption can be re-checked on demand for the price of one
+ * request per league, and read for free thereafter.
+ *
+ * Keyed by provider and SportAlpha league key, so the same competition can be
+ * described by two providers without collision. `provider_league_id` is
+ * recorded as the provider *returned* it, which is what confirms the configured
+ * id resolves to the competition we think it does.
+ */
+export const sportsLeagueCoverage = pgTable(
+  'sports_league_coverage',
+  {
+    provider: text().notNull(),
+    /** SportAlpha's key from `SUPPORTED_LEAGUES`. */
+    leagueKey: text('league_key').notNull(),
+    providerLeagueId: text('provider_league_id'),
+    name: text(),
+    country: text(),
+    /** Season the provider flags as current; null when it flags none. */
+    currentSeason: integer('current_season'),
+    /** Highest season year the plan exposes, current or not. */
+    latestSeason: integer('latest_season'),
+    seasons: jsonb().$type<SeasonCoverage[]>().notNull().default([]),
+    fixturesAvailable: boolean('fixtures_available').notNull().default(false),
+    /** Why the last check failed, when it did. Null on a healthy reading. */
+    error: text(),
+    checkedAt: timestamp('checked_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.provider, table.leagueKey] })],
+);
 

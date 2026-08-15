@@ -8,8 +8,11 @@ import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
 import { Stat } from '@/components/ui/stat';
 import { getProfile } from '@/lib/auth/server';
 import { CACHE_TTL_SECONDS, SUPPORTED_LEAGUES, SUPPORTED_LEAGUE_KEYS } from '@/lib/sports/config';
+import { coverageVerdict } from '@/lib/sports/coverage';
+import { todayIso } from '@/lib/sports/dates';
 import { getSportsDataStatus } from '@/lib/sports/status';
-import { SyncNowButton } from './sync-button';
+import { CoveragePanel, type CoverageRowView } from './coverage-panel';
+import { SyncPanel } from './sync-panel';
 
 export const metadata: Metadata = { title: 'Sports data' };
 export const dynamic = 'force-dynamic';
@@ -43,6 +46,22 @@ export default async function AdminSportsPage() {
       ? 'The daily request allowance is spent. It resets at 00:00 UTC.'
       : undefined;
 
+  // Dates and verdicts are resolved here so the client component receives plain
+  // values and renders identically on both passes.
+  const coverageRows: CoverageRowView[] = status.coverage.map((row) => ({
+    leagueKey: row.leagueKey,
+    name: row.name,
+    country: row.country,
+    providerLeagueId: row.providerLeagueId,
+    currentSeason: row.currentSeason,
+    latestSeason: row.latestSeason,
+    seasonYears: row.seasons.map((season) => season.year).sort((a, b) => b - a),
+    fixturesAvailable: row.fixturesAvailable,
+    error: row.error,
+    checkedAt: row.checkedAt ? when(row.checkedAt) : null,
+    verdict: coverageVerdict(row),
+  }));
+
   return (
     <>
       <Link href="/admin" className="mb-5 inline-flex items-center gap-2 text-sm text-muted hover:text-ink">
@@ -55,8 +74,10 @@ export default async function AdminSportsPage() {
         title="Sports data"
         description="State of the ingestion pipeline: what is configured, what was imported, and what it cost."
         actions={
-          <SyncNowButton
+          <SyncPanel
             disabled={!status.canSync}
+            today={todayIso()}
+            leagues={SUPPORTED_LEAGUE_KEYS}
             {...(syncDisabledReason ? { disabledReason: syncDisabledReason } : {})}
           />
         }
@@ -207,44 +228,70 @@ export default async function AdminSportsPage() {
                 No sync has been attempted yet.
               </p>
             ) : (
-              <table className="w-full text-sm">
-                <thead className="border-b border-line">
-                  <tr>
-                    <th className="eyebrow px-4 py-2.5 text-left font-normal">Type</th>
-                    <th className="eyebrow px-4 py-2.5 text-left font-normal">Status</th>
-                    <th className="eyebrow px-4 py-2.5 text-right font-normal">In / New / Fail</th>
-                    <th className="eyebrow px-4 py-2.5 text-right font-normal">Started</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line">
-                  {status.recentRuns.map((run) => (
-                    <tr key={run.id}>
-                      <td className="max-w-[22ch] truncate px-4 py-2.5 font-mono text-xs">
-                        {run.syncType}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <span
-                          className={
-                            run.status === 'completed'
-                              ? 'font-mono text-xs text-up'
-                              : run.status === 'failed'
-                                ? 'font-mono text-xs text-down'
-                                : 'font-mono text-xs text-muted'
-                          }
-                        >
-                          {run.status}
-                        </span>
-                      </td>
-                      <td className="tabular px-4 py-2.5 text-right font-mono text-xs text-muted">
-                        {run.recordsReceived} / {run.recordsInserted} / {run.recordsFailed}
-                      </td>
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-muted">
-                        {when(run.startedAt)}
-                      </td>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[46rem] text-sm">
+                  <thead className="border-b border-line">
+                    <tr>
+                      <th className="eyebrow px-3 py-2.5 text-left font-normal">Started</th>
+                      <th className="eyebrow px-3 py-2.5 text-left font-normal">Type</th>
+                      <th className="eyebrow px-3 py-2.5 text-left font-normal">Status</th>
+                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Returned</th>
+                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Matched</th>
+                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Inserted</th>
+                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Updated</th>
+                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Failed</th>
+                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Requests</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {status.recentRuns.map((run) => (
+                      <tr key={run.id}>
+                        <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-muted">
+                          {when(run.startedAt)}
+                        </td>
+                        <td className="max-w-[18ch] truncate px-3 py-2.5 font-mono text-xs">
+                          {run.syncType}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span
+                            className={
+                              run.status === 'completed'
+                                ? 'font-mono text-xs text-up'
+                                : run.status === 'failed'
+                                  ? 'font-mono text-xs text-down'
+                                  : 'font-mono text-xs text-muted'
+                            }
+                          >
+                            {run.status}
+                          </span>
+                        </td>
+                        <td className="tabular px-3 py-2.5 text-right font-mono text-xs text-muted">
+                          {run.providerReturned}
+                        </td>
+                        <td className="tabular px-3 py-2.5 text-right font-mono text-xs">
+                          {run.recordsMatched}
+                        </td>
+                        <td className="tabular px-3 py-2.5 text-right font-mono text-xs">
+                          {run.recordsInserted}
+                        </td>
+                        <td className="tabular px-3 py-2.5 text-right font-mono text-xs text-muted">
+                          {run.recordsUpdated}
+                        </td>
+                        <td
+                          className={`tabular px-3 py-2.5 text-right font-mono text-xs ${
+                            run.recordsFailed > 0 ? 'text-down' : 'text-muted'
+                          }`}
+                        >
+                          {run.recordsFailed}
+                        </td>
+                        <td className="tabular px-3 py-2.5 text-right font-mono text-xs text-muted">
+                          {run.apiRequests}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </CardBody>
         </Card>
@@ -305,7 +352,23 @@ export default async function AdminSportsPage() {
 
       <Card className="mt-5">
         <CardHeader>
-          <CardTitle>Coverage and refresh policy</CardTitle>
+          <CardTitle>Season coverage</CardTitle>
+          <span className="eyebrow">
+            {status.coverageCost === 0 ? 'Reading is current' : `Refresh costs ${status.coverageCost}`}
+          </span>
+        </CardHeader>
+        <CardBody className="p-0">
+          <CoveragePanel
+            rows={coverageRows}
+            cost={status.coverageCost}
+            disabled={!status.apiConfigured || status.quotaState === 'EXHAUSTED'}
+          />
+        </CardBody>
+      </Card>
+
+      <Card className="mt-5">
+        <CardHeader>
+          <CardTitle>Configuration and refresh policy</CardTitle>
           <span className="eyebrow">Configured centrally</span>
         </CardHeader>
         <CardBody className="grid gap-6 sm:grid-cols-2">
@@ -345,11 +408,13 @@ export default async function AdminSportsPage() {
       </Card>
 
       <p className="mt-6 rounded-xl border border-line bg-surface/50 px-4 py-3 text-xs leading-relaxed text-muted">
-        A sync is the only action in the product that reaches the provider. A fixtures sync costs a
-        single request: the day&rsquo;s whole slate is fetched once and the supported competitions
-        are filtered locally. Standings, statistics, lineups, injuries and odds are never fetched
-        automatically — they are separate syncs, charged per fixture. A run is skipped when stored
-        data is still inside its refresh window; press Sync now to override that and fetch regardless.
+        Check fixtures and Sync now are the only actions in the product that reach the provider, and
+        each costs a single request: the chosen day&rsquo;s whole slate is fetched once and the
+        supported competitions are filtered locally. Check writes nothing — it exists so a wrong
+        league id can be told apart from a day with no matches before anything is imported. Syncing
+        the same date twice updates in place, keyed on provider and provider fixture id, so it never
+        duplicates. Standings, statistics, lineups, injuries and odds are never fetched
+        automatically — they are separate syncs, charged per fixture.
       </p>
     </>
   );

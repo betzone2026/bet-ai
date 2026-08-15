@@ -7,7 +7,9 @@
  * covered by them, so the check is made here explicitly.
  *
  * Body: `{ date?: "YYYY-MM-DD", leagues?: LeagueKey[], syncType?: "fixtures" |
- * "standings" | "fixture-detail", fixtureId?: string, force?: boolean }`.
+ * "standings" | "fixture-detail", fixtureId?: string, force?: boolean }`. An
+ * absent or empty `date` means today; anything else must be a real calendar
+ * date inside the window `@/lib/sports/dates` allows.
  *
  * When `API_FOOTBALL_KEY` is absent the route answers 503 with
  * `API_NOT_CONFIGURED` rather than failing — a missing key is a configuration
@@ -17,6 +19,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getProfile } from '@/lib/auth/server';
 import { isLeagueKey, type LeagueKey } from '@/lib/sports/config';
+import { validateSyncDate } from '@/lib/sports/dates';
 import { codeFromSummary, httpStatusForCode } from '@/lib/sports/errors';
 import { isProviderConfigured } from '@/lib/sports/registry';
 import { syncFixtureDetail } from '@/lib/sports/sync/fixture-detail';
@@ -26,7 +29,6 @@ import { syncStandings } from '@/lib/sports/sync/standings';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const SYNC_TYPES = ['fixtures', 'standings', 'fixture-detail'] as const;
 type SyncType = (typeof SYNC_TYPES)[number];
 
@@ -83,8 +85,12 @@ export async function POST(request: NextRequest) {
     ? (body.syncType as SyncType)
     : 'fixtures';
 
-  if (body.date !== undefined && (typeof body.date !== 'string' || !DATE_PATTERN.test(body.date))) {
-    return NextResponse.json({ error: 'date must be formatted YYYY-MM-DD.' }, { status: 400 });
+  // The admin picks the date, so it is validated the same way the picker
+  // constrains it — one rule, in `@/lib/sports/dates`, rather than a regex here
+  // that would accept 2026-02-30 and silently sync 2 March instead.
+  const chosenDate = validateSyncDate(body.date);
+  if (!chosenDate.ok) {
+    return NextResponse.json({ error: chosenDate.reason }, { status: 400 });
   }
 
   let leagues: LeagueKey[] | undefined;
@@ -136,7 +142,7 @@ export async function POST(request: NextRequest) {
   }
 
   const summary = await syncFixtures({
-    ...(typeof body.date === 'string' ? { date: body.date } : {}),
+    date: chosenDate.date,
     ...(leagues ? { leagues } : {}),
     syncType: 'fixtures',
     triggeredBy,

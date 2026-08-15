@@ -15,6 +15,7 @@ import {
   sportsTeams,
 } from '@/../db/schema';
 import { DEFAULT_PROVIDER, SUPPORTED_LEAGUE_KEYS } from './config.ts';
+import { coverageRequestCost, readLeagueCoverage, type LeagueCoverageRow } from './coverage.ts';
 import { quotaState, readProviderQuota, type ProviderQuota, type QuotaState } from './quota.ts';
 import { isProviderConfigured } from './registry.ts';
 import { lastSyncRun, recentSyncRuns, type SyncRunRow } from './sync/runs.ts';
@@ -46,6 +47,16 @@ export interface SportsDataStatus {
   qualityAlerts: Array<{ status: DataQualityStatus; fixtures: number }>;
   /** True when the database has fixtures the interface can show. */
   hasRealData: boolean;
+  /**
+   * Latest stored season/coverage reading per competition.
+   *
+   * Read from the database, never fetched here: opening the admin page must
+   * cost nothing, and a stale reading with its timestamp is more honest than a
+   * fresh one bought without being asked for.
+   */
+  coverage: LeagueCoverageRow[];
+  /** Requests a coverage refresh would spend right now; zero while cached. */
+  coverageCost: number;
 }
 
 const UNKNOWN_QUOTA: ProviderQuota = {
@@ -81,6 +92,8 @@ function emptyStatus(apiConfigured: boolean): SportsDataStatus {
     counts: { fixtures: 0, teams: 0, leagues: 0, oddsSnapshots: 0 },
     qualityAlerts: [],
     hasRealData: false,
+    coverage: [],
+    coverageCost: 0,
   };
 }
 
@@ -88,8 +101,19 @@ export async function getSportsDataStatus(): Promise<SportsDataStatus> {
   const apiConfigured = isProviderConfigured();
 
   try {
-    const [fixtures, teams, leagues, odds, quality, success, failure, recent, requests, quota] =
-      await Promise.all([
+    const [
+      fixtures,
+      teams,
+      leagues,
+      odds,
+      quality,
+      success,
+      failure,
+      recent,
+      requests,
+      quota,
+      coverage,
+    ] = await Promise.all([
         db.select({ value: count() }).from(sportsFixtures),
         db.select({ value: count() }).from(sportsTeams),
         db.select({ value: count() }).from(sportsLeagues),
@@ -103,6 +127,7 @@ export async function getSportsDataStatus(): Promise<SportsDataStatus> {
         recentSyncRuns(8),
         requestsToday(DEFAULT_PROVIDER),
         readProviderQuota(DEFAULT_PROVIDER),
+        readLeagueCoverage(DEFAULT_PROVIDER),
       ]);
 
     const fixtureCount = fixtures[0]?.value ?? 0;
@@ -130,6 +155,8 @@ export async function getSportsDataStatus(): Promise<SportsDataStatus> {
         .filter((row) => row.status !== 'GOOD')
         .map((row) => ({ status: row.status, fixtures: row.value })),
       hasRealData: fixtureCount > 0,
+      coverage,
+      coverageCost: coverageRequestCost(coverage),
     };
   } catch {
     // The admin screen must render even when the database is down; the empty
