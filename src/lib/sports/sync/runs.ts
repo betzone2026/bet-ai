@@ -22,6 +22,16 @@ export interface SyncRunCounts {
   recordsUpdated: number;
   recordsFailed: number;
   apiRequests: number;
+  /**
+   * Entries the provider sent before local filtering, and how many survived it.
+   *
+   * Optional because only the fixtures sync filters — a standings run fetches
+   * exactly what it asked for, so the two numbers would be the same and saying
+   * so adds nothing.
+   */
+  providerReturned?: number;
+  recordsMatched?: number;
+  recordsUnchanged?: number;
 }
 
 export async function startSyncRun(input: {
@@ -66,6 +76,9 @@ export async function completeSyncRun(
       recordsInserted: input.counts.recordsInserted,
       recordsUpdated: input.counts.recordsUpdated,
       recordsFailed: input.counts.recordsFailed,
+      providerReturned: input.counts.providerReturned ?? input.counts.recordsReceived,
+      recordsMatched: input.counts.recordsMatched ?? input.counts.recordsReceived,
+      recordsUnchanged: input.counts.recordsUnchanged ?? 0,
       apiRequests: input.counts.apiRequests,
       errorSummary: summary,
     })

@@ -10,17 +10,22 @@ import {
   MAX_FIXTURES_PER_SYNC,
   SUPPORTED_LEAGUES,
   SUPPORTED_LEAGUE_KEYS,
+  leagueKeyForProviderId,
   providerIdFrom,
   providerLeagueId,
   seasonForDate,
   type LeagueKey,
 } from '../../config.ts';
-import { SportsProviderError } from '../../errors.ts';
+import { SportsProviderError, describeError } from '../../errors.ts';
 import type {
+  CompetitionSighting,
+  FixtureInspection,
   FixtureQuery,
   HeadToHeadQuery,
   InjuryQuery,
+  LeagueCoverageReport,
   ProviderUsage,
+  SeasonCoverage,
   SportsDataProvider,
   StandingsQuery,
   TeamQuery,
@@ -74,6 +79,168 @@ function requireProviderId(id: string, what: string): string {
 /** `YYYY-MM-DD` in UTC, the only date format the endpoint accepts. */
 function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Running totals for one fixtures fetch.
+ *
+ * Kept separate from the mapping so a range query, which spans several
+ * requests, produces one set of numbers rather than one per request.
+ */
+interface Accumulator {
+  providerReturned: number;
+  matched: number;
+  unmappable: number;
+  truncated: boolean;
+  competitions: Map<string, CompetitionSighting>;
+  bundles: FixtureBundle[];
+  observedAt: Date;
+}
+
+function newAccumulator(): Accumulator {
+  return {
+    providerReturned: 0,
+    matched: 0,
+    unmappable: 0,
+    truncated: false,
+    competitions: new Map(),
+    bundles: [],
+    observedAt: new Date(),
+  };
+}
+
+/**
+ * Folds one page of provider entries into the totals.
+ *
+ * Every entry is counted and its competition recorded *before* the supported
+ * filter runs — that ordering is the entire feature. Counting only what
+ * survives the filter is what made a wrong league id indistinguishable from an
+ * empty day in the first place.
+ */
+function absorb(
+  accumulator: Accumulator,
+  entries: ApiFootballFixtureEntry[],
+  wanted: Map<string, LeagueKey>,
+): void {
+  for (const entry of entries) {
+    accumulator.providerReturned += 1;
+
+    const rawLeagueId = entry.league?.id;
+    if (rawLeagueId === null || rawLeagueId === undefined) continue;
+    const leagueId = String(rawLeagueId);
+
+    const sighting = accumulator.competitions.get(leagueId);
+    if (sighting) {
+      sighting.fixtures += 1;
+    } else {
+      accumulator.competitions.set(leagueId, {
+        providerLeagueId: leagueId,
+        name: entry.league?.name?.trim() || `League ${leagueId}`,
+        country: entry.league?.country?.trim() || null,
+        fixtures: 1,
+        leagueKey: leagueKeyForProviderId(API_FOOTBALL_PROVIDER, leagueId),
+        supported: wanted.has(leagueId),
+      });
+    }
+
+    if (!wanted.has(leagueId)) continue;
+    accumulator.matched += 1;
+
+    if (accumulator.truncated) continue;
+
+    const bundle = mapFixtureBundle(entry, accumulator.observedAt);
+    if (!bundle) {
+      accumulator.unmappable += 1;
+      continue;
+    }
+
+    accumulator.bundles.push(bundle);
+    if (accumulator.bundles.length >= MAX_FIXTURES_PER_SYNC) accumulator.truncated = true;
+  }
+}
+
+/** Freezes the totals into the shape callers consume, most fixtures first. */
+function summarise(date: string, accumulator: Accumulator): FixtureInspection {
+  return {
+    date,
+    providerReturned: accumulator.providerReturned,
+    matched: accumulator.matched,
+    unmappable: accumulator.unmappable,
+    truncated: accumulator.truncated,
+    competitions: [...accumulator.competitions.values()].sort(
+      (a, b) =>
+        Number(b.supported) - Number(a.supported) ||
+        b.fixtures - a.fixtures ||
+        a.name.localeCompare(b.name),
+    ),
+    bundles: accumulator.bundles,
+  };
+}
+
+/** Reads one `leagues?id=` entry into the season/coverage diagnostic. */
+function mapLeagueCoverage(
+  leagueKey: LeagueKey,
+  providerId: string,
+  entry: ApiFootballLeagueEntry | null,
+): LeagueCoverageReport {
+  const configured = SUPPORTED_LEAGUES[leagueKey];
+
+  if (!entry) {
+    return {
+      leagueKey,
+      providerLeagueId: providerId,
+      name: configured?.name ?? leagueKey,
+      country: configured?.country ?? null,
+      currentSeason: null,
+      latestSeason: null,
+      seasons: [],
+      fixturesAvailable: false,
+      error: `${API_FOOTBALL_PROVIDER} returned no league for id ${providerId}.`,
+    };
+  }
+
+  const seasons: SeasonCoverage[] = (entry.seasons ?? []).flatMap((season) => {
+    if (typeof season.year !== 'number' || !Number.isFinite(season.year)) return [];
+    const coverage = season.coverage;
+    return [
+      {
+        year: season.year,
+        current: season.current === true,
+        start: season.start ?? null,
+        end: season.end ?? null,
+        // The plan exposes fixtures for a season whenever it exposes any
+        // fixture sub-feature; an all-false block means the season is listed
+        // but not served.
+        fixtures: Boolean(
+          coverage?.fixtures?.events ||
+            coverage?.fixtures?.lineups ||
+            coverage?.fixtures?.statistics_fixtures ||
+            coverage?.fixtures?.statistics_players ||
+            coverage?.standings,
+        ),
+        standings: coverage?.standings === true,
+        players: coverage?.players === true,
+        odds: coverage?.odds === true,
+        injuries: coverage?.injuries === true,
+      } satisfies SeasonCoverage,
+    ];
+  });
+
+  seasons.sort((a, b) => b.year - a.year);
+
+  return {
+    leagueKey,
+    providerLeagueId: entry.league?.id === undefined || entry.league?.id === null
+      ? providerId
+      : String(entry.league.id),
+    name: entry.league?.name?.trim() || configured?.name || leagueKey,
+    country: entry.country?.name?.trim() || configured?.country || null,
+    currentSeason: seasons.find((season) => season.current)?.year ?? null,
+    latestSeason: seasons[0]?.year ?? null,
+    seasons,
+    fixturesAvailable: seasons.some((season) => season.fixtures),
+    error: null,
+  };
 }
 
 export class ApiFootballProvider implements SportsDataProvider {
@@ -132,6 +299,19 @@ export class ApiFootballProvider implements SportsDataProvider {
    * and `season`, so it falls back to one request per competition.
    */
   async getFixtures(query: FixtureQuery): Promise<FixtureBundle[]> {
+    const inspection = await this.inspectFixtures(query);
+    return inspection.bundles;
+  }
+
+  /**
+   * The same fetch, with the discarded half of it reported.
+   *
+   * Filtering locally is cheap but blind: once the unsupported competitions are
+   * dropped there is no way to tell a quiet Tuesday from a wrong league id. This
+   * keeps both counts and every competition it saw, which is what the admin
+   * preview shows and what the sync records on its run.
+   */
+  async inspectFixtures(query: FixtureQuery): Promise<FixtureInspection> {
     const leagues = query.leagues?.length ? query.leagues : SUPPORTED_LEAGUE_KEYS;
 
     const wanted = new Map<string, LeagueKey>();
@@ -139,67 +319,99 @@ export class ApiFootballProvider implements SportsDataProvider {
       const id = providerLeagueId(key, this.name);
       if (id) wanted.set(id, key);
     }
-    if (wanted.size === 0) return [];
+
+    const date = query.date ?? isoDate(new Date());
+    const accumulator = newAccumulator();
+    if (wanted.size === 0) return summarise(date, accumulator);
 
     if (query.from || query.to) {
-      return this.getFixturesByLeague(query, [...wanted.keys()]);
+      await this.collectByLeague(query, wanted, accumulator);
+      return summarise(query.from ?? date, accumulator);
     }
 
-    return this.getFixturesByDate(query.date ?? isoDate(new Date()), wanted);
-  }
-
-  /** The low-cost path: one call, local filtering. */
-  private async getFixturesByDate(
-    date: string,
-    wanted: Map<string, LeagueKey>,
-  ): Promise<FixtureBundle[]> {
     const envelope = await this.client.get<ApiFootballFixtureEntry>('fixtures', { date });
-    const observedAt = new Date();
-    const bundles: FixtureBundle[] = [];
-
-    for (const entry of envelope.response ?? []) {
-      const leagueId = entry.league?.id;
-      if (leagueId === null || leagueId === undefined) continue;
-      if (!wanted.has(String(leagueId))) continue;
-
-      const bundle = mapFixtureBundle(entry, observedAt);
-      if (bundle) bundles.push(bundle);
-      if (bundles.length >= MAX_FIXTURES_PER_SYNC) return bundles;
-    }
-
-    return bundles;
+    absorb(accumulator, envelope.response ?? [], wanted);
+    return summarise(date, accumulator);
   }
 
   /** Range queries: one request per competition, as the endpoint demands. */
-  private async getFixturesByLeague(
+  private async collectByLeague(
     query: FixtureQuery,
-    leagueIds: string[],
-  ): Promise<FixtureBundle[]> {
+    wanted: Map<string, LeagueKey>,
+    accumulator: Accumulator,
+  ): Promise<void> {
     const referenceDate = query.from
       ? new Date(`${query.from}T12:00:00Z`)
       : query.date
         ? new Date(`${query.date}T12:00:00Z`)
         : new Date();
     const season = query.season ?? seasonForDate(referenceDate);
-    const observedAt = new Date();
-    const bundles: FixtureBundle[] = [];
 
-    for (const leagueId of leagueIds) {
+    for (const leagueId of wanted.keys()) {
       const envelope = await this.client.get<ApiFootballFixtureEntry>('fixtures', {
         league: leagueId,
         season,
         from: query.from,
         to: query.to ?? query.from,
       });
+      absorb(accumulator, envelope.response ?? [], wanted);
+      if (accumulator.truncated) return;
+    }
+  }
 
-      for (const entry of envelope.response ?? []) {
-        const bundle = mapFixtureBundle(entry, observedAt);
-        if (bundle) bundles.push(bundle);
-        if (bundles.length >= MAX_FIXTURES_PER_SYNC) return bundles;
+  /**
+   * Season and coverage diagnostic, one request per configured competition.
+   *
+   * `leagues?id=` carries every season the caller's plan exposes together with
+   * what each one covers, which is the authoritative answer to "does this key
+   * see the 2026 season?". Asking it costs one request per league — three on the
+   * current slate — and the result is cached in the database, so the question is
+   * asked when an operator wants it answered and not on every page load.
+   *
+   * A competition that fails is reported as a failed competition rather than
+   * failing the whole diagnostic: knowing that two of three are healthy is more
+   * useful than knowing the run threw.
+   */
+  async getLeagueCoverage(leagues?: LeagueKey[]): Promise<LeagueCoverageReport[]> {
+    const keys = leagues?.length ? leagues : SUPPORTED_LEAGUE_KEYS;
+    const reports: LeagueCoverageReport[] = [];
+
+    for (const key of keys) {
+      const id = providerLeagueId(key, this.name);
+      if (!id) {
+        reports.push({
+          leagueKey: key,
+          providerLeagueId: null,
+          name: SUPPORTED_LEAGUES[key]?.name ?? key,
+          country: SUPPORTED_LEAGUES[key]?.country ?? null,
+          currentSeason: null,
+          latestSeason: null,
+          seasons: [],
+          fixturesAvailable: false,
+          error: `No ${this.name} league id is configured for ${key}.`,
+        });
+        continue;
+      }
+
+      try {
+        const envelope = await this.client.get<ApiFootballLeagueEntry>('leagues', { id });
+        reports.push(mapLeagueCoverage(key, id, envelope.response?.[0] ?? null));
+      } catch (error) {
+        reports.push({
+          leagueKey: key,
+          providerLeagueId: id,
+          name: SUPPORTED_LEAGUES[key]?.name ?? key,
+          country: SUPPORTED_LEAGUES[key]?.country ?? null,
+          currentSeason: null,
+          latestSeason: null,
+          seasons: [],
+          fixturesAvailable: false,
+          error: describeError(error),
+        });
       }
     }
 
-    return bundles;
+    return reports;
   }
 
   async getFixture(id: string): Promise<FixtureBundle | null> {

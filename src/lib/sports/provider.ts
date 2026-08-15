@@ -67,6 +67,86 @@ export interface ProviderUsage {
 }
 
 /**
+ * One competition observed in a raw fixtures response.
+ *
+ * This is what makes a misconfigured league id visible. `fixtures?date=` answers
+ * with every competition playing that day; recording what came back — including
+ * the competitions we do not follow — is how an admin confirms that Serie A's
+ * provider id really is 135 rather than discovering months later that every
+ * sync has been importing nothing.
+ */
+export interface CompetitionSighting {
+  /** The provider's own league id, exactly as it appeared in the payload. */
+  providerLeagueId: string;
+  name: string;
+  country: string | null;
+  fixtures: number;
+  /** SportAlpha's key when this competition is configured, else `null`. */
+  leagueKey: string | null;
+  supported: boolean;
+}
+
+/**
+ * A fixtures fetch described in full, before anything is written.
+ *
+ * `providerReturned` and `matched` are tracked separately on purpose: their
+ * difference is the only evidence that distinguishes "no football today" from
+ * "the league filter is wrong". See `../messages.ts`.
+ */
+export interface FixtureInspection {
+  date: string;
+  /** Entries the provider sent, counted before any local filtering. */
+  providerReturned: number;
+  /** Entries belonging to the requested competitions. */
+  matched: number;
+  /** Matched entries that could not be normalised into a bundle. */
+  unmappable: number;
+  /** Every competition present in the response, matched or not. */
+  competitions: CompetitionSighting[];
+  /** The normalised, supported fixtures — what a sync would write. */
+  bundles: FixtureBundle[];
+  /** True when the runaway guard stopped the mapper short of the full slate. */
+  truncated: boolean;
+}
+
+/** One season of a competition, with what the plan actually covers in it. */
+export interface SeasonCoverage {
+  year: number;
+  current: boolean;
+  start: string | null;
+  end: string | null;
+  /** Whether the plan serves fixtures for this season at all. */
+  fixtures: boolean;
+  standings: boolean;
+  players: boolean;
+  odds: boolean;
+  injuries: boolean;
+}
+
+/**
+ * What the provider says it can serve for one configured competition.
+ *
+ * The point is to stop guessing. A plan's season window is a fact the provider
+ * publishes, and hardcoding an assumed range into the codebase turns a fact into
+ * a stale constant that silently breaks the pipeline the day the plan changes.
+ */
+export interface LeagueCoverageReport {
+  leagueKey: string;
+  providerLeagueId: string | null;
+  name: string | null;
+  country: string | null;
+  /** The season the provider flags as current, when it flags one. */
+  currentSeason: number | null;
+  /** Highest season year the plan exposes, current or not. */
+  latestSeason: number | null;
+  seasons: SeasonCoverage[];
+  /** True when at least one exposed season serves fixtures. */
+  fixturesAvailable: boolean;
+  /** Set when this competition could not be checked. */
+  error: string | null;
+}
+
+/**
  * Allowance the provider reported, split into the two limits every feed has:
  * a daily quota and a shorter burst window. `null` means the provider did not
  * say — which is not the same as zero, and must never be treated as zero.
@@ -109,6 +189,21 @@ export interface SportsDataProvider {
 
   getLeagues(): Promise<League[]>;
   getFixtures(query: FixtureQuery): Promise<FixtureBundle[]>;
+  /**
+   * Same fetch as `getFixtures`, reported rather than reduced.
+   *
+   * `getFixtures` throws away the two numbers an operator needs — what arrived
+   * and what survived the filter — so the sync and the admin preview both go
+   * through this instead and derive the bundles from it.
+   */
+  inspectFixtures(query: FixtureQuery): Promise<FixtureInspection>;
+  /**
+   * Season and coverage diagnostic for the configured competitions.
+   *
+   * Read-only and self-describing: it answers which seasons the plan actually
+   * exposes today, so no part of the codebase has to assume a season range.
+   */
+  getLeagueCoverage(leagues?: LeagueKey[]): Promise<LeagueCoverageReport[]>;
   getFixture(id: string): Promise<FixtureBundle | null>;
   getTeams(query: TeamQuery): Promise<Team[]>;
   getTeam(id: string): Promise<Team | null>;

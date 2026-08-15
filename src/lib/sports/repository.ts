@@ -25,6 +25,7 @@ import {
   standings as standingsTable,
 } from '@/../db/schema';
 import { selectNewSnapshots } from './odds.ts';
+import { partitionFixtures, type StoredFixtureComparable } from './diff.ts';
 import type {
   DataQualityIssue,
   DataQualityStatus,
@@ -42,9 +43,11 @@ import type {
 export interface WriteCounts {
   inserted: number;
   updated: number;
+  /** Rows that arrived identical to what was stored, so nothing was written. */
+  unchanged: number;
 }
 
-const NO_WRITES: WriteCounts = { inserted: 0, updated: 0 };
+const NO_WRITES: WriteCounts = { inserted: 0, updated: 0, unchanged: 0 };
 
 /** Splits a batch into rows that already exist and rows that do not. */
 async function classify(
@@ -57,7 +60,7 @@ async function classify(
     .from(table)
     .where(inArray(table.id, ids));
   const updated = existing.length;
-  return { inserted: ids.length - updated, updated };
+  return { inserted: ids.length - updated, updated, unchanged: 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -175,16 +178,63 @@ export interface FixtureWrite {
   issues: DataQualityIssue[];
 }
 
+/**
+ * Writes a batch of fixtures, reporting what each one actually did.
+ *
+ * Re-syncing a date is expected — an admin checks a day, syncs it, then syncs
+ * it again after the matches finish — so the interesting question is not "did
+ * it insert or update?" but "did anything change?". Rows whose content is
+ * identical to what is stored are counted as `unchanged` and excluded from the
+ * statement entirely, which keeps `updated_at` meaningful and makes a repeated
+ * sync of a settled day a read rather than a rewrite.
+ *
+ * Duplicates are impossible either way: the primary key is
+ * `<provider>-<providerFixtureId>` and `(provider, provider_id)` is unique, so
+ * the same fixture from the same provider is always the same row.
+ */
 export async function upsertFixtures(writes: FixtureWrite[]): Promise<WriteCounts> {
   if (writes.length === 0) return NO_WRITES;
 
-  const unique = [...new Map(writes.map((write) => [write.fixture.id, write])).values()];
-  const counts = await classify(sportsFixtures, unique.map((write) => write.fixture.id));
+  const ids = [...new Set(writes.map((write) => write.fixture.id))];
+  const existing = await db
+    .select({
+      id: sportsFixtures.id,
+      leagueId: sportsFixtures.leagueId,
+      season: sportsFixtures.season,
+      homeTeamId: sportsFixtures.homeTeamId,
+      awayTeamId: sportsFixtures.awayTeamId,
+      kickoff: sportsFixtures.kickoff,
+      timezone: sportsFixtures.timezone,
+      status: sportsFixtures.status,
+      elapsed: sportsFixtures.elapsed,
+      homeScore: sportsFixtures.homeScore,
+      awayScore: sportsFixtures.awayScore,
+      venue: sportsFixtures.venue,
+      referee: sportsFixtures.referee,
+      round: sportsFixtures.round,
+      dataQuality: sportsFixtures.dataQuality,
+      qualityIssues: sportsFixtures.qualityIssues,
+    })
+    .from(sportsFixtures)
+    .where(inArray(sportsFixtures.id, ids));
+
+  const stored = new Map<string, StoredFixtureComparable>(
+    existing.map((row) => [row.id, row]),
+  );
+  const partition = partitionFixtures(writes, stored);
+
+  if (partition.write.length === 0) {
+    return {
+      inserted: partition.inserted,
+      updated: partition.updated,
+      unchanged: partition.unchanged,
+    };
+  }
 
   await db
     .insert(sportsFixtures)
     .values(
-      unique.map(({ fixture, quality, issues }) => ({
+      partition.write.map(({ fixture, quality, issues }) => ({
         id: fixture.id,
         provider: fixture.provider,
         providerId: fixture.providerId,
@@ -229,7 +279,11 @@ export async function upsertFixtures(writes: FixtureWrite[]): Promise<WriteCount
       },
     });
 
-  return counts;
+  return {
+    inserted: partition.inserted,
+    updated: partition.updated,
+    unchanged: partition.unchanged,
+  };
 }
 
 export async function upsertFixtureStatistics(stats: FixtureStatistics): Promise<void> {

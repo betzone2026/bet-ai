@@ -17,12 +17,15 @@
 import {
   CACHE_TTL_SECONDS,
   DEFAULT_PROVIDER,
+  MAX_FIXTURES_PER_SYNC,
   SUPPORTED_LEAGUE_KEYS,
   type LeagueKey,
 } from '../config.ts';
+import { todayIso } from '../dates.ts';
 import { SportsProviderError, describeError, isSportsProviderError } from '../errors.ts';
 import { sportsLog } from '../logging.ts';
-import type { SportsDataProvider } from '../provider.ts';
+import { describeFixtureOutcome } from '../messages.ts';
+import type { CompetitionSighting, SportsDataProvider } from '../provider.ts';
 import { dedupeFixtureBundles, validateFixtureBundle } from '../quality.ts';
 import { canSpendQuota, readProviderQuota, recordQuotaObservation } from '../quota.ts';
 import { getProvider } from '../registry.ts';
@@ -52,21 +55,34 @@ export interface SyncFixturesSummary {
   status: SyncRunStatus | 'skipped';
   date: string;
   leagues: LeagueKey[];
+  /** Fixtures the provider sent for the date, before the league filter. */
+  providerReturned: number;
+  /** Of those, the ones in a configured competition. */
+  recordsMatched: number;
   recordsReceived: number;
   recordsInserted: number;
   recordsUpdated: number;
+  /** Already stored and identical, so no write was made. */
+  recordsUnchanged: number;
   recordsFailed: number;
   duplicatesIgnored: number;
   invalidFixtures: number;
   partialFixtures: number;
   apiRequests: number;
+  /** Competitions present in the response, whether configured or not. */
+  competitions: CompetitionSighting[];
+  /**
+   * One sentence an operator can act on. Distinguishes an empty day from a
+   * league filter that matched nothing — see `../messages.ts`.
+   */
+  message: string;
   errors: string[];
   /** Set when the run was skipped because stored data was still fresh. */
   skippedReason?: string;
 }
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIso();
 }
 
 /**
@@ -111,14 +127,19 @@ export async function syncFixtures(
     status: 'failed',
     date,
     leagues,
+    providerReturned: 0,
+    recordsMatched: 0,
     recordsReceived: 0,
     recordsInserted: 0,
     recordsUpdated: 0,
+    recordsUnchanged: 0,
     recordsFailed: 0,
     duplicatesIgnored: 0,
     invalidFixtures: 0,
     partialFixtures: 0,
     apiRequests: 0,
+    competitions: [],
+    message: '',
     errors: [],
   };
 
@@ -133,6 +154,7 @@ export async function syncFixtures(
   if (!provider.isConfigured()) {
     summary.status = 'skipped';
     summary.skippedReason = 'API_NOT_CONFIGURED';
+    summary.message = 'No provider key is configured, so no request was attempted.';
     return summary;
   }
 
@@ -142,6 +164,7 @@ export async function syncFixtures(
     if (await hasRecentSuccess(providerName, `${syncType}:${date}`, ttl)) {
       summary.status = 'skipped';
       summary.skippedReason = 'FRESH';
+      summary.message = `${date} was already imported inside its refresh window; no request was made.`;
       return summary;
     }
   }
@@ -156,6 +179,7 @@ export async function syncFixtures(
     summary.errors.push(
       `[RATE_LIMITED] the daily allowance is spent (0 of ${quota.dailyLimit ?? '?'} left); it resets at 00:00 UTC.`,
     );
+    summary.message = summary.errors[0] ?? 'The daily request allowance is spent.';
     return summary;
   }
 
@@ -168,8 +192,28 @@ export async function syncFixtures(
   summary.runId = runId;
 
   try {
-    const bundles = await provider.getFixtures({ date, leagues });
+    // The inspecting form of the call, so the two counts an operator needs —
+    // what arrived and what survived the league filter — are kept rather than
+    // reduced away. It is the same single request either way.
+    const inspection = await provider.inspectFixtures({ date, leagues });
+    summary.providerReturned = inspection.providerReturned;
+    summary.recordsMatched = inspection.matched;
+    summary.competitions = inspection.competitions;
+
+    const bundles = inspection.bundles;
     summary.recordsReceived = bundles.length;
+
+    if (inspection.unmappable > 0) {
+      summary.recordsFailed += inspection.unmappable;
+      summary.errors.push(
+        `${inspection.unmappable} matched fixture(s) were missing the identifiers required to store them.`,
+      );
+    }
+    if (inspection.truncated) {
+      summary.errors.push(
+        `the response exceeded the ${MAX_FIXTURES_PER_SYNC}-fixture ceiling for one sync; the remainder was not imported.`,
+      );
+    }
 
     const { unique, duplicates } = dedupeFixtureBundles(bundles);
     summary.duplicatesIgnored = duplicates.length;
@@ -211,10 +255,18 @@ export async function syncFixtures(
     const written = await write(() => upsertFixtures(fixtureWrites));
     summary.recordsInserted = written.inserted;
     summary.recordsUpdated = written.updated;
+    summary.recordsUnchanged = written.unchanged;
     summary.status = summary.recordsFailed > 0 ? 'partial' : 'completed';
+    summary.message = describeFixtureOutcome({
+      providerReturned: summary.providerReturned,
+      matched: summary.recordsMatched,
+      date,
+      provider: providerName,
+    });
   } catch (error) {
     summary.status = 'failed';
     summary.errors.push(describeError(error));
+    summary.message = describeError(error);
     if (isSportsProviderError(error)) {
       sportsLog.error('fixture sync failed', {
         code: error.code,
@@ -238,9 +290,12 @@ export async function syncFixtures(
   await completeSyncRun(runId, {
     status: summary.status,
     counts: {
+      providerReturned: summary.providerReturned,
+      recordsMatched: summary.recordsMatched,
       recordsReceived: summary.recordsReceived,
       recordsInserted: summary.recordsInserted,
       recordsUpdated: summary.recordsUpdated,
+      recordsUnchanged: summary.recordsUnchanged,
       recordsFailed: summary.recordsFailed,
       apiRequests: summary.apiRequests,
     },

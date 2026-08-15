@@ -36,7 +36,31 @@ export interface ApiFootballLeagueEntry {
     start?: string;
     end?: string;
     current?: boolean;
+    /**
+     * What the caller's plan serves for this season.
+     *
+     * The only authoritative answer to "does the Free plan cover 2026?" — which
+     * is why the season diagnostic reads it instead of assuming a range.
+     */
+    coverage?: ApiFootballCoverage;
   }>;
+}
+
+export interface ApiFootballCoverage {
+  fixtures?: {
+    events?: boolean;
+    lineups?: boolean;
+    statistics_fixtures?: boolean;
+    statistics_players?: boolean;
+  };
+  standings?: boolean;
+  players?: boolean;
+  top_scorers?: boolean;
+  top_assists?: boolean;
+  top_cards?: boolean;
+  injuries?: boolean;
+  predictions?: boolean;
+  odds?: boolean;
 }
 
 export interface ApiFootballTeamEntry {
