@@ -14,11 +14,11 @@ export function DashboardPreview() {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="eyebrow">The terminal</p>
-            <h2 className="mt-3 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+            <h2 className="mt-3 font-display text-section font-semibold sm:text-section-lg">
               Every fixture, one readout
             </h2>
           </div>
-          <p className="max-w-md text-sm leading-relaxed text-muted">
+          <p className="max-w-md text-body leading-relaxed text-muted">
             The same distribution strip appears everywhere a fixture does, so the shape of a
             match is readable before you look at a single number.
           </p>
@@ -40,7 +40,7 @@ export function DashboardPreview() {
                   <p className="eyebrow">
                     {match.league} &middot; {formatKickoff(match.kickoff)}
                   </p>
-                  <p className="mt-1 truncate font-display text-sm font-semibold">
+                  <p className="mt-1 truncate font-display text-body font-semibold">
                     {match.homeTeam} <span className="text-muted">vs</span> {match.awayTeam}
                   </p>
                   <div className="mt-2.5 max-w-sm">
@@ -48,7 +48,7 @@ export function DashboardPreview() {
                   </div>
                 </div>
 
-                <div className="tabular flex items-center gap-5 font-mono text-xs">
+                <div className="tabular flex items-center gap-5 font-mono text-fine">
                   <span><span className="text-muted">1 </span>{pct(match.probabilities.home, 0)}</span>
                   <span><span className="text-muted">X </span>{pct(match.probabilities.draw, 0)}</span>
                   <span><span className="text-muted">2 </span>{pct(match.probabilities.away, 0)}</span>

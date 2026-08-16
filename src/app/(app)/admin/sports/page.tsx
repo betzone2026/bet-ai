@@ -1,17 +1,21 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { ArrowLeft } from 'lucide-react';
 import { PageHeader } from '@/components/app/page-header';
+import { AdminNav } from '@/components/app/admin-nav';
 import { Badge, DataQualityBadge } from '@/components/ui/badge';
-import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
-import { Stat } from '@/components/ui/stat';
+import { Card, CardBody, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { MetricCard } from '@/components/ui/metric-card';
+import { DataTable, type Column } from '@/components/ui/data-table';
+import { AppIcon } from '@/components/ui/icon';
+import { Note } from '@/components/ui/states';
 import { getProfile } from '@/lib/auth/server';
 import { CACHE_TTL_SECONDS, SUPPORTED_LEAGUES, SUPPORTED_LEAGUE_KEYS } from '@/lib/sports/config';
 import { coverageVerdict } from '@/lib/sports/coverage';
 import { todayIso } from '@/lib/sports/dates';
 import { getSportsDataStatus } from '@/lib/sports/status';
+import type { SyncRunRow } from '@/lib/sports/sync/runs';
 import { CoveragePanel, type CoverageRowView } from './coverage-panel';
+import { QuotaMeter } from './quota-meter';
 import { SyncPanel } from './sync-panel';
 
 export const metadata: Metadata = { title: 'Sports data' };
@@ -32,6 +36,80 @@ function when(value: Date | null): string {
 function counter(value: number | null): string {
   return value === null ? '—' : value.toLocaleString('en-US');
 }
+
+const RUN_COLUMNS: Array<Column<SyncRunRow>> = [
+  {
+    key: 'started',
+    header: 'Started',
+    primary: true,
+    cell: (run) => (
+      <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-mono text-fine text-muted">{when(run.startedAt)}</span>
+        <span className="font-mono text-small text-ink">{run.syncType}</span>
+      </span>
+    ),
+  },
+  {
+    key: 'status',
+    header: 'Status',
+    cell: (run) => (
+      <Badge
+        variant={
+          run.status === 'completed' ? 'success' : run.status === 'failed' ? 'danger' : 'neutral'
+        }
+      >
+        {run.status}
+      </Badge>
+    ),
+  },
+  {
+    key: 'returned',
+    header: 'Returned',
+    align: 'right',
+    numeric: true,
+    hideOnMobile: true,
+    cell: (run) => run.providerReturned,
+  },
+  {
+    key: 'matched',
+    header: 'Matched',
+    align: 'right',
+    numeric: true,
+    cell: (run) => run.recordsMatched,
+  },
+  {
+    key: 'inserted',
+    header: 'New',
+    align: 'right',
+    numeric: true,
+    cell: (run) => run.recordsInserted,
+  },
+  {
+    key: 'updated',
+    header: 'Updated',
+    align: 'right',
+    numeric: true,
+    hideOnMobile: true,
+    cell: (run) => run.recordsUpdated,
+  },
+  {
+    key: 'failed',
+    header: 'Failed',
+    align: 'right',
+    numeric: true,
+    cell: (run) => (
+      <span className={run.recordsFailed > 0 ? 'text-down' : 'text-muted'}>{run.recordsFailed}</span>
+    ),
+  },
+  {
+    key: 'requests',
+    header: 'Requests',
+    align: 'right',
+    numeric: true,
+    hideOnMobile: true,
+    cell: (run) => run.apiRequests,
+  },
+];
 
 export default async function AdminSportsPage() {
   const profile = await getProfile();
@@ -64,271 +142,237 @@ export default async function AdminSportsPage() {
 
   return (
     <>
-      <Link href="/admin" className="mb-5 inline-flex items-center gap-2 text-sm text-muted hover:text-ink">
-        <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
-        Admin
-      </Link>
-
       <PageHeader
-        eyebrow="Internal"
+        eyebrow="Internal console"
         title="Sports data"
         description="State of the ingestion pipeline: what is configured, what was imported, and what it cost."
-        actions={
-          <SyncPanel
-            disabled={!status.canSync}
-            today={todayIso()}
-            leagues={SUPPORTED_LEAGUE_KEYS}
-            {...(syncDisabledReason ? { disabledReason: syncDisabledReason } : {})}
-          />
-        }
       />
 
+      <AdminNav />
+
       {!status.apiConfigured && (
-        <div className="mb-6 rounded-xl border border-alpha/30 bg-alpha/[0.06] px-5 py-4">
-          <p className="eyebrow text-alpha">API not configured</p>
-          <h2 className="mt-1 font-display text-base font-semibold">
-            No provider key is set
-          </h2>
-          <p className="mt-1 text-sm text-muted">
-            Set <code className="font-mono text-xs">API_FOOTBALL_KEY</code> under Site configuration
-            → Environment variables to enable imports. The application keeps running on the demo
-            dataset until it is present; no request is attempted without it.
-          </p>
-        </div>
+        <Card variant="warning" className="mb-4">
+          <CardBody className="flex gap-3">
+            <AppIcon name="alert" size={18} className="mt-0.5 shrink-0 text-alpha" />
+            <div>
+              <h2 className="font-display text-h3 font-semibold">No provider key is set</h2>
+              <p className="mt-1 text-small leading-relaxed text-muted">
+                Set <code className="font-mono text-fine text-ink">API_FOOTBALL_KEY</code> under
+                Site configuration → Environment variables to enable imports. The application keeps
+                running on the demo dataset until it is present; no request is attempted without it.
+              </p>
+            </div>
+          </CardBody>
+        </Card>
       )}
 
       {status.apiConfigured && status.quotaState === 'EXHAUSTED' && (
-        <div className="mb-6 rounded-xl border border-down/30 bg-down/[0.06] px-5 py-4">
-          <p className="eyebrow text-down">Quota exhausted</p>
-          <h2 className="mt-1 font-display text-base font-semibold">
-            No requests left today
-          </h2>
-          <p className="mt-1 text-sm text-muted">
-            The provider reports 0 of {counter(quota.dailyLimit)} daily requests remaining. Sync is
-            disabled until the allowance resets at 00:00 UTC; stored fixtures continue to be served.
-          </p>
-        </div>
+        <Card variant="danger" className="mb-4">
+          <CardBody className="flex gap-3">
+            <AppIcon name="alert" size={18} className="mt-0.5 shrink-0 text-down" />
+            <div>
+              <h2 className="font-display text-h3 font-semibold">No requests left today</h2>
+              <p className="mt-1 text-small leading-relaxed text-muted">
+                The provider reports 0 of {counter(quota.dailyLimit)} daily requests remaining. Sync
+                is disabled until the allowance resets at 00:00 UTC; stored fixtures continue to be
+                served.
+              </p>
+            </div>
+          </CardBody>
+        </Card>
       )}
 
       {status.apiConfigured && status.quotaState === 'LOW' && (
-        <div className="mb-6 rounded-xl border border-alpha/30 bg-alpha/[0.06] px-5 py-4">
-          <p className="eyebrow text-alpha">Quota running low</p>
-          <h2 className="mt-1 font-display text-base font-semibold">
-            {counter(quota.dailyRemaining)} of {counter(quota.dailyLimit)} daily requests left
-          </h2>
-          <p className="mt-1 text-sm text-muted">
-            A fixtures sync costs one request. Detail syncs — standings, statistics, lineups,
-            injuries, odds — are charged per fixture, so run them sparingly until the reset.
-          </p>
-        </div>
+        <Card variant="warning" className="mb-4">
+          <CardBody className="flex gap-3">
+            <AppIcon name="alert" size={18} className="mt-0.5 shrink-0 text-alpha" />
+            <div>
+              <h2 className="font-display text-h3 font-semibold">
+                {counter(quota.dailyRemaining)} of {counter(quota.dailyLimit)} daily requests left
+              </h2>
+              <p className="mt-1 text-small leading-relaxed text-muted">
+                A fixtures sync costs one request. Detail syncs — standings, statistics, lineups,
+                injuries, odds — are charged per fixture, so run them sparingly until the reset.
+              </p>
+            </div>
+          </CardBody>
+        </Card>
       )}
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Provider" value={status.provider} hint="Server-side only" />
-        <Stat
-          label="API configured"
-          value={status.apiConfigured ? 'Yes' : 'No'}
+      <section aria-label="Provider" className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <MetricCard
+          label="Provider"
+          value={status.provider}
+          hint="Server-side only"
+          icon="sportsData"
+        />
+        <MetricCard
+          label="API status"
+          value={status.apiConfigured ? 'Configured' : 'Absent'}
           accent={status.apiConfigured}
           hint={status.apiConfigured ? 'Key present in the environment' : 'Serving demo data'}
+          icon="shield"
         />
-        <Stat
-          label="Requests today"
+        <MetricCard
+          label="Daily requests"
           value={status.requestsToday.toLocaleString('en-US')}
-          hint="Counted per endpoint against the plan quota"
+          hint="Counted per endpoint"
+          icon="apiUsage"
         />
-        <Stat
-          label="Data mode"
-          value={status.hasRealData ? 'REAL' : 'DEMO'}
-          accent={status.hasRealData}
-          hint={status.hasRealData ? 'Fixtures are served from the database' : 'No fixtures stored yet'}
-        />
-      </section>
-
-      <section className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat
-          label="Daily API limit"
-          value={counter(quota.dailyLimit)}
-          hint="Requests the plan allows per day"
-        />
-        <Stat
+        <MetricCard
           label="Daily remaining"
           value={counter(quota.dailyRemaining)}
           accent={status.quotaState === 'OK'}
           hint={
             status.quotaState === 'UNKNOWN'
               ? 'Not yet reported by the provider'
-              : `Resets at 00:00 UTC · read ${when(quota.observedAt)}`
+              : `of ${counter(quota.dailyLimit)} · read ${when(quota.observedAt)}`
           }
-        />
-        <Stat
-          label="Burst limit / minute"
-          value={counter(quota.burstLimit)}
-          hint="Requests allowed inside one minute"
-        />
-        <Stat
-          label="Burst remaining"
-          value={counter(quota.burstRemaining)}
-          hint="Refills every minute"
+          icon="gauge"
         />
       </section>
 
-      <section className="mt-3 grid gap-3 sm:grid-cols-2">
-        <Stat
-          label="Last API response"
-          value={
-            quota.lastOutcome
-              ? `${quota.lastStatus ?? '—'} ${quota.lastOutcome}`
-              : 'none yet'
-          }
-          accent={quota.lastOutcome === 'SUCCESS'}
-          hint={
-            quota.lastEndpoint
-              ? `${quota.lastEndpoint} · ${quota.lastResultCount ?? 0} results · ${when(quota.observedAt)}`
-              : 'No provider call has been made'
-          }
+      <section aria-label="Stored records" className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <MetricCard
+          label="Fixtures"
+          value={status.counts.fixtures.toLocaleString('en-US')}
+          hint={status.hasRealData ? 'Served from the database' : 'Demo dataset in use'}
+          icon="matches"
         />
-        <Stat
-          label="Last sync status"
-          value={status.lastSync?.status ?? 'none yet'}
-          accent={status.lastSync?.status === 'completed'}
-          hint={
-            status.lastSync
-              ? `${status.lastSync.syncType} · ${when(status.lastSync.completedAt ?? status.lastSync.startedAt)}`
-              : 'No sync has been attempted'
-          }
+        <MetricCard
+          label="Teams"
+          value={status.counts.teams.toLocaleString('en-US')}
+          hint="Deduplicated by provider id"
+          icon="users"
         />
-      </section>
-
-      {quota.lastOutcome && quota.lastOutcome !== 'SUCCESS' && quota.lastMessage && (
-        <p className="mt-3 rounded-xl border border-down/30 bg-down/[0.05] px-4 py-3 text-xs leading-relaxed text-down">
-          <span className="font-mono">{quota.lastOutcome}</span> — {quota.lastMessage}
-        </p>
-      )}
-
-      <section className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Fixtures" value={status.counts.fixtures.toLocaleString('en-US')} />
-        <Stat label="Teams" value={status.counts.teams.toLocaleString('en-US')} />
-        <Stat label="Leagues" value={status.counts.leagues.toLocaleString('en-US')} />
-        <Stat
+        <MetricCard
+          label="Leagues"
+          value={status.counts.leagues.toLocaleString('en-US')}
+          hint={`${SUPPORTED_LEAGUE_KEYS.length} configured`}
+          icon="leagues"
+        />
+        <MetricCard
           label="Odds snapshots"
           value={status.counts.oddsSnapshots.toLocaleString('en-US')}
           hint="Append-only price history"
+          icon="wallet"
         />
       </section>
 
-      <div className="mt-6 grid gap-5 lg:grid-cols-[1.6fr_1fr]">
+      {/* ---- Sync control ------------------------------------------- */}
+      <div className="mt-6 grid gap-4 lg:grid-cols-[1.5fr_1fr] lg:items-start">
         <Card>
           <CardHeader>
-            <CardTitle>Recent sync runs</CardTitle>
-            <span className="eyebrow">Newest first</span>
+            <CardTitle>Sync control</CardTitle>
+            <CardDescription>The only two actions that reach the provider</CardDescription>
           </CardHeader>
-          <CardBody className="p-0">
-            {status.recentRuns.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-muted">
-                No sync has been attempted yet.
-              </p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[46rem] text-sm">
-                  <thead className="border-b border-line">
-                    <tr>
-                      <th className="eyebrow px-3 py-2.5 text-left font-normal">Started</th>
-                      <th className="eyebrow px-3 py-2.5 text-left font-normal">Type</th>
-                      <th className="eyebrow px-3 py-2.5 text-left font-normal">Status</th>
-                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Returned</th>
-                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Matched</th>
-                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Inserted</th>
-                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Updated</th>
-                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Failed</th>
-                      <th className="eyebrow px-3 py-2.5 text-right font-normal">Requests</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line">
-                    {status.recentRuns.map((run) => (
-                      <tr key={run.id}>
-                        <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-muted">
-                          {when(run.startedAt)}
-                        </td>
-                        <td className="max-w-[18ch] truncate px-3 py-2.5 font-mono text-xs">
-                          {run.syncType}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <span
-                            className={
-                              run.status === 'completed'
-                                ? 'font-mono text-xs text-up'
-                                : run.status === 'failed'
-                                  ? 'font-mono text-xs text-down'
-                                  : 'font-mono text-xs text-muted'
-                            }
-                          >
-                            {run.status}
-                          </span>
-                        </td>
-                        <td className="tabular px-3 py-2.5 text-right font-mono text-xs text-muted">
-                          {run.providerReturned}
-                        </td>
-                        <td className="tabular px-3 py-2.5 text-right font-mono text-xs">
-                          {run.recordsMatched}
-                        </td>
-                        <td className="tabular px-3 py-2.5 text-right font-mono text-xs">
-                          {run.recordsInserted}
-                        </td>
-                        <td className="tabular px-3 py-2.5 text-right font-mono text-xs text-muted">
-                          {run.recordsUpdated}
-                        </td>
-                        <td
-                          className={`tabular px-3 py-2.5 text-right font-mono text-xs ${
-                            run.recordsFailed > 0 ? 'text-down' : 'text-muted'
-                          }`}
-                        >
-                          {run.recordsFailed}
-                        </td>
-                        <td className="tabular px-3 py-2.5 text-right font-mono text-xs text-muted">
-                          {run.apiRequests}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+          <CardBody>
+            <SyncPanel
+              disabled={!status.canSync}
+              today={todayIso()}
+              leagues={SUPPORTED_LEAGUE_KEYS}
+              {...(syncDisabledReason ? { disabledReason: syncDisabledReason } : {})}
+            />
           </CardBody>
         </Card>
 
-        <div className="space-y-5">
+        <div className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Last outcomes</CardTitle>
+              <CardTitle id="quota">Request quota</CardTitle>
+              <Badge
+                variant={
+                  status.quotaState === 'OK'
+                    ? 'success'
+                    : status.quotaState === 'LOW'
+                      ? 'warning'
+                      : status.quotaState === 'EXHAUSTED'
+                        ? 'danger'
+                        : 'neutral'
+                }
+              >
+                {status.quotaState}
+              </Badge>
             </CardHeader>
-            <CardBody className="space-y-4 text-sm">
-              <div>
-                <p className="eyebrow">Last successful sync</p>
-                <p className="mt-1 font-mono text-xs text-muted">
-                  {when(status.lastSuccessfulSync?.completedAt ?? status.lastSuccessfulSync?.startedAt ?? null)}
+            <CardBody className="space-y-4">
+              <QuotaMeter
+                used={status.requestsToday}
+                limit={quota.dailyLimit}
+                remaining={quota.dailyRemaining}
+              />
+              <dl className="grid grid-cols-2 gap-3 border-t border-line pt-3">
+                <Fact label="Burst / minute" value={counter(quota.burstLimit)} />
+                <Fact label="Burst left" value={counter(quota.burstRemaining)} />
+              </dl>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Last sync</CardTitle>
+              <Badge
+                variant={
+                  status.lastSync?.status === 'completed'
+                    ? 'success'
+                    : status.lastSync?.status === 'failed'
+                      ? 'danger'
+                      : 'neutral'
+                }
+              >
+                {status.lastSync?.status ?? 'none yet'}
+              </Badge>
+            </CardHeader>
+            <CardBody className="space-y-3">
+              <dl className="space-y-2.5">
+                <Row
+                  label="Most recent"
+                  value={
+                    status.lastSync
+                      ? `${status.lastSync.syncType} · ${when(status.lastSync.completedAt ?? status.lastSync.startedAt)}`
+                      : 'No sync has been attempted'
+                  }
+                />
+                <Row
+                  label="Last success"
+                  value={when(
+                    status.lastSuccessfulSync?.completedAt ??
+                      status.lastSuccessfulSync?.startedAt ??
+                      null,
+                  )}
+                />
+                <Row label="Last failure" value={when(status.lastFailedSync?.startedAt ?? null)} />
+                <Row
+                  label="Last API response"
+                  value={
+                    quota.lastOutcome
+                      ? `${quota.lastStatus ?? '—'} ${quota.lastOutcome}${quota.lastEndpoint ? ` · ${quota.lastEndpoint}` : ''}`
+                      : 'No provider call has been made'
+                  }
+                />
+              </dl>
+
+              {status.lastFailedSync?.errorSummary && (
+                <p className="max-h-24 overflow-y-auto rounded-lg border border-down/25 bg-down/[0.05] px-3 py-2 font-mono text-fine leading-relaxed text-down">
+                  {status.lastFailedSync.errorSummary}
                 </p>
-              </div>
-              <div>
-                <p className="eyebrow">Last failed sync</p>
-                <p className="mt-1 font-mono text-xs text-muted">
-                  {when(status.lastFailedSync?.startedAt ?? null)}
+              )}
+
+              {quota.lastOutcome && quota.lastOutcome !== 'SUCCESS' && quota.lastMessage && (
+                <p className="rounded-lg border border-down/25 bg-down/[0.05] px-3 py-2 font-mono text-fine leading-relaxed text-down">
+                  {quota.lastOutcome} — {quota.lastMessage}
                 </p>
-                {status.lastFailedSync?.errorSummary && (
-                  <p className="mt-1.5 max-h-24 overflow-y-auto text-xs text-down">
-                    {status.lastFailedSync.errorSummary}
-                  </p>
-                )}
-              </div>
+              )}
             </CardBody>
           </Card>
 
           <Card>
             <CardHeader>
               <CardTitle>Data quality</CardTitle>
+              <CardDescription>Stored fixtures by validation status</CardDescription>
             </CardHeader>
             <CardBody>
               {status.qualityAlerts.length === 0 ? (
-                <p className="text-sm text-muted">
+                <p className="text-small text-muted">
                   {status.counts.fixtures === 0
                     ? 'Nothing imported yet.'
                     : 'Every stored fixture passed validation.'}
@@ -338,7 +382,7 @@ export default async function AdminSportsPage() {
                   {status.qualityAlerts.map((alert) => (
                     <li key={alert.status} className="flex items-center justify-between gap-3">
                       <DataQualityBadge status={alert.status} />
-                      <span className="tabular font-mono text-sm">
+                      <span className="tabular font-mono text-small">
                         {alert.fixtures.toLocaleString('en-US')}
                       </span>
                     </li>
@@ -350,23 +394,44 @@ export default async function AdminSportsPage() {
         </div>
       </div>
 
-      <Card className="mt-5">
-        <CardHeader>
-          <CardTitle>Season coverage</CardTitle>
-          <span className="eyebrow">
-            {status.coverageCost === 0 ? 'Reading is current' : `Refresh costs ${status.coverageCost}`}
-          </span>
-        </CardHeader>
-        <CardBody className="p-0">
-          <CoveragePanel
-            rows={coverageRows}
-            cost={status.coverageCost}
-            disabled={!status.apiConfigured || status.quotaState === 'EXHAUSTED'}
-          />
-        </CardBody>
-      </Card>
+      {/* ---- Run history -------------------------------------------- */}
+      <section className="mt-8">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="font-display text-h2 font-semibold">Recent sync runs</h2>
+          <span className="font-mono text-fine text-muted">Newest first</span>
+        </div>
+        <DataTable
+          columns={RUN_COLUMNS}
+          rows={status.recentRuns}
+          rowKey={(run) => run.id}
+          caption="The most recent ingestion runs, with the records each one wrote"
+          empty={
+            <Card>
+              <CardBody className="text-small text-muted">
+                No sync has been attempted yet.
+              </CardBody>
+            </Card>
+          }
+        />
+      </section>
 
-      <Card className="mt-5">
+      <section className="mt-8">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="font-display text-h2 font-semibold">Season coverage</h2>
+          <span className="font-mono text-fine text-muted">
+            {status.coverageCost === 0
+              ? 'Reading is current'
+              : `Refresh costs ${status.coverageCost}`}
+          </span>
+        </div>
+        <CoveragePanel
+          rows={coverageRows}
+          cost={status.coverageCost}
+          disabled={!status.apiConfigured || status.quotaState === 'EXHAUSTED'}
+        />
+      </section>
+
+      <Card className="mt-4">
         <CardHeader>
           <CardTitle>Configuration and refresh policy</CardTitle>
           <span className="eyebrow">Configured centrally</span>
@@ -374,9 +439,9 @@ export default async function AdminSportsPage() {
         <CardBody className="grid gap-6 sm:grid-cols-2">
           <div>
             <p className="eyebrow">Competitions</p>
-            <ul className="mt-2 space-y-2">
+            <ul className="mt-2.5 space-y-2">
               {SUPPORTED_LEAGUE_KEYS.map((key) => (
-                <li key={key} className="flex items-center justify-between gap-3 text-sm">
+                <li key={key} className="flex items-center justify-between gap-3 text-small">
                   <span>{SUPPORTED_LEAGUES[key].name}</span>
                   <Badge>{SUPPORTED_LEAGUES[key].country}</Badge>
                 </li>
@@ -385,7 +450,7 @@ export default async function AdminSportsPage() {
           </div>
           <div>
             <p className="eyebrow">Refresh windows</p>
-            <dl className="mt-2 space-y-1.5 text-sm">
+            <dl className="mt-2.5 space-y-2">
               {(
                 [
                   ['Live fixtures', CACHE_TTL_SECONDS.fixturesLive],
@@ -395,9 +460,9 @@ export default async function AdminSportsPage() {
                   ['Odds', CACHE_TTL_SECONDS.odds],
                 ] as const
               ).map(([label, seconds]) => (
-                <div key={label} className="flex items-baseline justify-between gap-3">
+                <div key={label} className="flex items-baseline justify-between gap-3 text-small">
                   <dt className="text-muted">{label}</dt>
-                  <dd className="tabular font-mono text-xs">
+                  <dd className="tabular font-mono text-fine">
                     {seconds >= 3600 ? `${Math.round(seconds / 3600)}h` : `${Math.round(seconds / 60)}m`}
                   </dd>
                 </div>
@@ -407,7 +472,7 @@ export default async function AdminSportsPage() {
         </CardBody>
       </Card>
 
-      <p className="mt-6 rounded-xl border border-line bg-surface/50 px-4 py-3 text-xs leading-relaxed text-muted">
+      <Note className="mt-6">
         Check fixtures and Sync now are the only actions in the product that reach the provider, and
         each costs a single request: the chosen day&rsquo;s whole slate is fetched once and the
         supported competitions are filtered locally. Check writes nothing — it exists so a wrong
@@ -415,7 +480,25 @@ export default async function AdminSportsPage() {
         the same date twice updates in place, keyed on provider and provider fixture id, so it never
         duplicates. Standings, statistics, lineups, injuries and odds are never fetched
         automatically — they are separate syncs, charged per fixture.
-      </p>
+      </Note>
     </>
+  );
+}
+
+function Fact({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="eyebrow">{label}</dt>
+      <dd className="tabular mt-1 font-mono text-small text-ink">{value}</dd>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+      <dt className="eyebrow">{label}</dt>
+      <dd className="font-mono text-fine text-muted">{value}</dd>
+    </div>
   );
 }

@@ -16,7 +16,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       </main>
 
       <footer className="px-5 py-8 lg:px-8">
-        <DisclaimerNote className="mx-auto max-w-2xl text-center text-[11px] leading-relaxed text-muted" />
+        <DisclaimerNote className="mx-auto max-w-2xl text-center text-fine leading-relaxed text-muted" />
       </footer>
     </div>
   );

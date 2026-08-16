@@ -40,6 +40,8 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
+  // The one colour that cannot come from a CSS variable: browser and PWA
+  // chrome is painted before any stylesheet loads. Mirrors `--c-base`.
   themeColor: '#07090D',
   width: 'device-width',
   initialScale: 1,

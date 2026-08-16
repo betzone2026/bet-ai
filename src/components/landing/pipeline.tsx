@@ -41,10 +41,10 @@ export function Pipeline() {
     <section id="analytics" className="border-t border-line py-20 sm:py-28">
       <div className="mx-auto max-w-shell px-5 lg:px-8">
         <p className="eyebrow">How it works</p>
-        <h2 className="mt-3 max-w-2xl font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+        <h2 className="mt-3 max-w-2xl font-display text-section font-semibold sm:text-section-lg">
           Six stages, one direction
         </h2>
-        <p className="mt-4 max-w-2xl text-base leading-relaxed text-muted">
+        <p className="mt-4 max-w-2xl text-lead text-muted">
           SportAlpha AI uses quantitative analysis to estimate probabilities and uncertainty.
           The platform does not guarantee outcomes.
         </p>
@@ -53,11 +53,11 @@ export function Pipeline() {
           {STAGES.map((stage) => (
             <li key={stage.id} className="group relative bg-surface p-6">
               <div className="flex items-baseline gap-3">
-                <span className="font-mono text-xs text-alpha">{stage.id}</span>
+                <span className="font-mono text-fine text-alpha">{stage.id}</span>
                 <span className="h-px flex-1 bg-line transition-colors group-hover:bg-alpha/40" />
               </div>
-              <h3 className="mt-4 font-display text-base font-semibold">{stage.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted">{stage.body}</p>
+              <h3 className="mt-4 font-display text-h3 font-semibold">{stage.title}</h3>
+              <p className="mt-2 text-body leading-relaxed text-muted">{stage.body}</p>
             </li>
           ))}
         </ol>

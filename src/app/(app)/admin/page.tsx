@@ -1,31 +1,19 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { count, desc, eq, ne, sum } from 'drizzle-orm';
 import { db } from '@/../db';
 import { profiles, simulationRuns, sportsFixtures, subscriptions, usageLogs } from '@/../db/schema';
 import { getProfile } from '@/lib/auth/server';
 import { PageHeader } from '@/components/app/page-header';
-import { Stat } from '@/components/ui/stat';
-import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
+import { AdminNav } from '@/components/app/admin-nav';
+import { MetricCard } from '@/components/ui/metric-card';
+import { DataTable, type Column } from '@/components/ui/data-table';
+import { Badge } from '@/components/ui/badge';
+import { ErrorState, EmptyState, Note } from '@/components/ui/states';
 import { PLANS } from '@/lib/config/plans';
 
 export const metadata: Metadata = { title: 'Admin' };
 export const dynamic = 'force-dynamic';
-
-/** Sections of the internal console. Those already built link out. */
-const SECTIONS: Array<{ label: string; href?: string }> = [
-  { label: 'Users' },
-  { label: 'Subscriptions' },
-  { label: 'Sports data', href: '/admin/sports' },
-  { label: 'Leagues' },
-  { label: 'Matches' },
-  { label: 'Models' },
-  { label: 'Monte Carlo' },
-  { label: 'API usage', href: '/admin/sports' },
-  { label: 'System logs' },
-  { label: 'Settings' },
-];
 
 interface Metrics {
   users: number;
@@ -76,6 +64,41 @@ async function loadMetrics(): Promise<Metrics | null> {
   }
 }
 
+type Profile = typeof profiles.$inferSelect;
+
+const SIGNUP_COLUMNS: Array<Column<Profile>> = [
+  {
+    key: 'email',
+    header: 'Email',
+    primary: true,
+    cell: (row) => <span className="block truncate font-medium text-ink">{row.email}</span>,
+  },
+  {
+    key: 'plan',
+    header: 'Plan',
+    cell: (row) => (
+      <Badge variant={row.plan === 'free' ? 'neutral' : 'premium'}>{row.plan}</Badge>
+    ),
+  },
+  {
+    key: 'status',
+    header: 'Billing',
+    hideOnMobile: true,
+    cell: (row) => (
+      <Badge variant={row.subscriptionStatus === 'active' ? 'success' : 'neutral'}>
+        {row.subscriptionStatus.replace('_', ' ')}
+      </Badge>
+    ),
+  },
+  {
+    key: 'joined',
+    header: 'Joined',
+    align: 'right',
+    numeric: true,
+    cell: (row) => row.createdAt.toLocaleDateString('en-GB'),
+  },
+];
+
 export default async function AdminPage() {
   const profile = await getProfile();
   if (!profile?.is_admin) redirect('/dashboard');
@@ -85,98 +108,102 @@ export default async function AdminPage() {
   return (
     <>
       <PageHeader
-        eyebrow="Internal"
-        title="Admin"
-        description="Live counts read straight from the database."
+        eyebrow="Internal console"
+        title="Overview"
+        description="Live counts read straight from the database. Nothing here is cached or estimated."
       />
 
+      <AdminNav />
+
       {!metrics ? (
-        <div className="rounded-xl border border-down/30 bg-down/[0.06] px-5 py-6">
-          <p className="eyebrow text-down">Error</p>
-          <h2 className="mt-1 font-display text-base font-semibold">Metrics unavailable</h2>
-          <p className="mt-1 text-sm text-muted">
-            Netlify Database is unavailable. Check the site database connection and reload.
-          </p>
-        </div>
+        <ErrorState
+          title="Metrics unavailable"
+          description="The database did not answer, so no count on this screen can be trusted. Check the site database connection and reload."
+          detail="Query batch against profiles, subscriptions, simulation_runs, usage_logs and sports_fixtures threw. Most often an unset or expired NETLIFY_DATABASE_URL."
+          showDetail
+        />
       ) : (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Stat label="MRR" value={`€${(metrics.mrrCents / 100).toFixed(2)}`} accent hint="Sum of active paid plans" />
-            <Stat label="Users" value={metrics.users.toLocaleString('en-US')} />
-            <Stat label="Active subscriptions" value={metrics.activeSubscriptions.toLocaleString('en-US')} />
-            <Stat label="Trials" value={metrics.trials.toLocaleString('en-US')} />
-            <Stat label="AI queries" value={metrics.aiQueries.toLocaleString('en-US')} hint="All time" />
-            <Stat label="Monte Carlo runs" value={metrics.monteCarloRuns.toLocaleString('en-US')} />
-            <Stat
+          <section aria-label="Account and revenue" className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <MetricCard
+              label="MRR"
+              value={`€${(metrics.mrrCents / 100).toFixed(2)}`}
+              hint="Sum of active paid plans"
+              icon="subscription"
+              accent
+            />
+            <MetricCard
+              label="Users"
+              value={metrics.users.toLocaleString('en-US')}
+              hint="Profiles on record"
+              icon="users"
+            />
+            <MetricCard
+              label="Active subscriptions"
+              value={metrics.activeSubscriptions.toLocaleString('en-US')}
+              hint="Status active"
+              icon="check"
+            />
+            <MetricCard
+              label="Trials"
+              value={metrics.trials.toLocaleString('en-US')}
+              hint="Status trialing"
+              icon="history"
+            />
+          </section>
+
+          <section aria-label="Engine usage" className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <MetricCard
+              label="AI queries"
+              value={metrics.aiQueries.toLocaleString('en-US')}
+              hint="All time"
+              icon="analyst"
+            />
+            <MetricCard
+              label="Monte Carlo runs"
+              value={metrics.monteCarloRuns.toLocaleString('en-US')}
+              hint="Stored runs"
+              icon="simulation"
+            />
+            <MetricCard
               label="Fixtures imported"
               value={metrics.fixtures.toLocaleString('en-US')}
               hint={metrics.fixtures === 0 ? 'Demo dataset in use' : 'Stored from the provider'}
+              icon="sportsData"
             />
-            <Stat label="Churn" value="—" hint="Needs 30 days of billing history" />
-          </div>
+            <MetricCard
+              label="Churn"
+              value="—"
+              hint="Needs 30 days of billing history"
+              icon="down"
+            />
+          </section>
 
-          <div className="mt-6 grid gap-5 lg:grid-cols-[1.6fr_1fr]">
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent sign-ups</CardTitle>
-              </CardHeader>
-              <CardBody className="p-0">
-                <table className="w-full text-sm">
-                  <thead className="border-b border-line">
-                    <tr>
-                      <th className="eyebrow px-4 py-2.5 text-left font-normal">Email</th>
-                      <th className="eyebrow px-4 py-2.5 text-left font-normal">Plan</th>
-                      <th className="eyebrow px-4 py-2.5 text-right font-normal">Joined</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line">
-                    {metrics.recent.map((row) => (
-                      <tr key={row.id}>
-                        <td className="max-w-[18ch] truncate px-4 py-2.5">{row.email}</td>
-                        <td className="px-4 py-2.5 font-mono text-xs text-alpha">{row.plan}</td>
-                        <td className="px-4 py-2.5 text-right font-mono text-xs text-muted">
-                          {row.createdAt.toLocaleDateString('en-GB')}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </CardBody>
-            </Card>
+          <section className="mt-8">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="font-display text-h2 font-semibold">Recent sign-ups</h2>
+              <span className="font-mono text-fine text-muted">Last {metrics.recent.length}</span>
+            </div>
+            <DataTable
+              columns={SIGNUP_COLUMNS}
+              rows={metrics.recent}
+              rowKey={(row) => row.id}
+              caption="The eight most recently created profiles"
+              empty={
+                <EmptyState
+                  icon="users"
+                  title="No profiles yet."
+                  description="Accounts appear here as soon as the first user completes sign-up."
+                />
+              }
+            />
+          </section>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Sections</CardTitle>
-              </CardHeader>
-              <CardBody>
-                <ul className="grid grid-cols-2 gap-2">
-                  {SECTIONS.map((section) =>
-                    section.href ? (
-                      <li key={section.label}>
-                        <Link
-                          href={section.href}
-                          className="block rounded-lg border border-alpha/35 bg-alpha/[0.06] px-3 py-2 text-xs text-alpha hover:border-alpha/60"
-                        >
-                          {section.label}
-                        </Link>
-                      </li>
-                    ) : (
-                      <li
-                        key={section.label}
-                        className="rounded-lg border border-dashed border-line px-3 py-2 text-xs text-muted"
-                      >
-                        {section.label}
-                      </li>
-                    ),
-                  )}
-                </ul>
-                <p className="mt-4 text-xs leading-relaxed text-muted">
-                  Sports data is live; the remaining sections get their own table view as the
-                  features behind them are built.
-                </p>
-              </CardBody>
-            </Card>
-          </div>
+          <Note className="mt-6">
+            Every figure above is a count over the whole table at the moment the page rendered.
+            Revenue is the sum of list prices for non-free plans, not billed revenue — discounts,
+            proration and failed payments are not reflected until billing history is wired in.
+          </Note>
         </>
       )}
     </>

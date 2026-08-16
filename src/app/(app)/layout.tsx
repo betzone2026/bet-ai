@@ -1,8 +1,10 @@
 import { redirect } from 'next/navigation';
 import { getProfile, hasSessionCookie } from '@/lib/auth/server';
+import { hasStoredFixtures } from '@/lib/sports/status';
 import { Sidebar } from '@/components/app/sidebar';
 import { MobileNav } from '@/components/app/mobile-nav';
 import { Topbar } from '@/components/app/topbar';
+import { SIDEBAR_KEY } from '@/components/app/nav-items';
 import { DisclaimerNote } from '@/components/ui/compliance';
 
 /**
@@ -16,6 +18,15 @@ import { DisclaimerNote } from '@/components/ui/compliance';
  * declaration is the explicit, reviewable statement of the requirement.
  */
 export const dynamic = 'force-dynamic';
+
+/**
+ * Applies the stored sidebar preference before the first paint.
+ *
+ * Reading localStorage from an effect would render the expanded rail and
+ * then snap it shut one frame later, which is visible on every single
+ * navigation. Eight lines of blocking script buy a correct first paint.
+ */
+const SIDEBAR_PREFERENCE = `try{if(localStorage.getItem('${SIDEBAR_KEY}')==='collapsed'){document.documentElement.dataset.sidebar='collapsed'}}catch(e){}`;
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const profile = await getProfile();
@@ -33,23 +44,42 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     redirect(hadSession ? '/login?error=session_expired' : '/login');
   }
 
+  // The same rule the fixture screens use, asked once for the chrome: if the
+  // database holds imported fixtures the reader is looking at real data.
+  // A single indexed `LIMIT 1`, and it already swallows its own failures.
+  const dataStatus = (await hasStoredFixtures()) ? 'LIVE' : 'DEMO';
+
   return (
     <div className="flex min-h-screen">
-      <Sidebar plan={profile.plan} isAdmin={profile.is_admin} />
+      <script dangerouslySetInnerHTML={{ __html: SIDEBAR_PREFERENCE }} />
+
+      <Sidebar plan={profile.plan} email={profile.email} isAdmin={profile.is_admin} />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar email={profile.email} plan={profile.plan} />
+        <Topbar
+          email={profile.email}
+          plan={profile.plan}
+          isAdmin={profile.is_admin}
+          dataStatus={dataStatus}
+        />
 
-        <main className="flex-1 px-4 pb-24 pt-6 lg:px-8 lg:pb-10">
+        <main className="flex-1 px-4 pt-6 lg:px-8">
           <div className="mx-auto max-w-shell">{children}</div>
         </main>
 
-        <footer className="border-t border-line px-4 py-6 lg:px-8">
-          <DisclaimerNote className="mx-auto max-w-shell text-[11px] leading-relaxed text-muted" />
+        {/* The bottom navigation floats above this footer on small screens,
+            so the clearance for it lives here, at the end of the document. */}
+        <footer className="mt-8 border-t border-line px-4 pt-6 lg:px-8 lg:pb-6">
+          <DisclaimerNote className="mx-auto max-w-shell text-fine leading-relaxed text-muted" />
+          <div
+            aria-hidden
+            className="lg:hidden"
+            style={{ height: 'calc(4.5rem + env(safe-area-inset-bottom, 0px))' }}
+          />
         </footer>
       </div>
 
-      <MobileNav />
+      <MobileNav plan={profile.plan} email={profile.email} isAdmin={profile.is_admin} />
     </div>
   );
 }

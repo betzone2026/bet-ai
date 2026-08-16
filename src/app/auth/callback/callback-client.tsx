@@ -1,8 +1,10 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { getUser, handleAuthCallback } from '@netlify/identity';
+import { ButtonLink } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/icon';
+import { FormError } from '@/app/(auth)/form-shell';
 import {
   hashHasAuthToken,
   redeemCallbackOnce,
@@ -66,39 +68,35 @@ export function CallbackClient() {
   if (failure) {
     return (
       <div className="space-y-4">
-        <p
-          role="alert"
-          className="rounded-lg border border-down/35 bg-down/[0.07] px-3 py-2 text-xs text-down"
-        >
-          {failure === 'unverified'
-            ? 'Your address was confirmed, but we could not start a session.'
-            : 'We could not complete the confirmation.'}
-        </p>
-        <p className="text-sm leading-relaxed text-muted">
+        <FormError
+          message={
+            failure === 'unverified'
+              ? 'Your address was confirmed, but we could not start a session.'
+              : 'We could not complete the confirmation.'
+          }
+        />
+        <p className="text-small leading-relaxed text-muted">
           {failure === 'unverified'
             ? 'Your account is ready — log in with the email and password you just chose.'
             : 'Confirmation links can only be used once and expire after 24 hours. If you already confirmed this address, log in normally. Otherwise request a new link by signing up again with the same email.'}
         </p>
-        <div className="flex flex-wrap gap-3 text-sm">
-          <Link href="/login" className="text-alpha hover:underline">
+        <div className="flex flex-wrap gap-2">
+          <ButtonLink href="/login" size="sm">
             Go to log in
-          </Link>
-          <Link href="/register" className="text-muted hover:text-ink">
+          </ButtonLink>
+          <ButtonLink href="/register" size="sm" variant="secondary">
             Request a new link
-          </Link>
+          </ButtonLink>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-3 text-sm text-muted">
-      <span
-        aria-hidden
-        className="h-3.5 w-3.5 animate-spin rounded-full border border-line border-t-alpha"
-      />
+    <p className="flex items-center gap-2.5 text-small text-muted">
+      <Spinner size={16} label="" className="text-alpha" />
       Completing sign in…
-    </div>
+    </p>
   );
 }
 

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { Menu, X } from 'lucide-react';
+import { AppIcon } from '@/components/ui/icon';
 import { Wordmark } from '@/components/landing/wordmark';
 import { ButtonLink } from '@/components/ui/button';
 
@@ -28,7 +28,7 @@ export function SiteHeader() {
             <Link
               key={item.href}
               href={item.href}
-              className="text-sm text-muted transition-colors hover:text-ink"
+              className="text-body text-muted transition-colors hover:text-ink"
             >
               {item.label}
             </Link>
@@ -36,7 +36,7 @@ export function SiteHeader() {
         </nav>
 
         <div className="hidden items-center gap-3 md:flex">
-          <Link href="/login" className="text-sm text-muted transition-colors hover:text-ink">
+          <Link href="/login" className="text-body text-muted transition-colors hover:text-ink">
             Log in
           </Link>
           <ButtonLink href="/register" size="sm">
@@ -51,7 +51,7 @@ export function SiteHeader() {
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
         >
-          {open ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+          <AppIcon name={open ? 'close' : 'menu'} size={18} />
         </button>
       </div>
 
@@ -63,7 +63,7 @@ export function SiteHeader() {
                 key={item.href}
                 href={item.href}
                 onClick={() => setOpen(false)}
-                className="rounded-lg px-2 py-2.5 text-sm text-muted hover:bg-raised hover:text-ink"
+                className="rounded-lg px-2 py-2.5 text-body text-muted hover:bg-raised hover:text-ink"
               >
                 {item.label}
               </Link>
@@ -71,7 +71,7 @@ export function SiteHeader() {
             <Link
               href="/login"
               onClick={() => setOpen(false)}
-              className="rounded-lg px-2 py-2.5 text-sm text-muted hover:bg-raised hover:text-ink"
+              className="rounded-lg px-2 py-2.5 text-body text-muted hover:bg-raised hover:text-ink"
             >
               Log in
             </Link>
