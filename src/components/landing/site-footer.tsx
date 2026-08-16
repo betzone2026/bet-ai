@@ -38,7 +38,7 @@ export function SiteFooter() {
         <div className="grid gap-10 md:grid-cols-[1.5fr_repeat(3,1fr)]">
           <div>
             <Wordmark />
-            <p className="mt-4 max-w-xs text-sm leading-relaxed text-muted">
+            <p className="mt-4 max-w-xs text-body leading-relaxed text-muted">
               Turn sports data into probabilities.
             </p>
           </div>
@@ -49,7 +49,7 @@ export function SiteFooter() {
               <ul className="mt-4 space-y-2.5">
                 {column.links.map((link) => (
                   <li key={link.href}>
-                    <Link href={link.href} className="text-sm text-muted transition-colors hover:text-ink">
+                    <Link href={link.href} className="text-body text-muted transition-colors hover:text-ink">
                       {link.label}
                     </Link>
                   </li>
@@ -60,13 +60,13 @@ export function SiteFooter() {
         </div>
 
         <div className="mt-12 space-y-3 border-t border-line pt-8">
-          <DisclaimerNote className="max-w-3xl text-xs leading-relaxed text-muted" />
-          <p className="max-w-3xl text-xs leading-relaxed text-muted">
+          <DisclaimerNote className="max-w-3xl text-fine leading-relaxed text-muted" />
+          <p className="max-w-3xl text-fine leading-relaxed text-muted">
             Nothing on this platform is betting advice. If gambling is affecting your life,
             support is available in most countries through national helplines and services
             such as GamCare, BeGambleAware and Gambling Therapy.
           </p>
-          <p className="pt-2 text-xs text-muted">
+          <p className="pt-2 text-fine text-muted">
             © {new Date().getFullYear()} SportAlpha AI. All rights reserved.
           </p>
         </div>

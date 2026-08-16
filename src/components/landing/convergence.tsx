@@ -77,12 +77,12 @@ export function ConvergenceHero() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="eyebrow">Live simulation</p>
-          <p className="mt-1.5 font-display text-sm font-semibold">Arsenal vs Brighton</p>
-          <p className="text-xs text-muted">Premier League &middot; sample fixture</p>
+          <p className="mt-1.5 font-display text-body font-semibold">Arsenal vs Brighton</p>
+          <p className="text-fine text-muted">Premier League &middot; sample fixture</p>
         </div>
         <div className="text-right">
           <p className="eyebrow">Paths</p>
-          <p className="tabular mt-1.5 font-mono text-lg text-alpha">
+          <p className="tabular mt-1.5 font-mono text-data-sm text-alpha">
             {paths.toLocaleString('en-US')}
           </p>
         </div>
@@ -101,15 +101,15 @@ export function ConvergenceHero() {
       <dl className="mt-6 grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-line bg-line">
         <div className="bg-surface px-3 py-3">
           <dt className="eyebrow">Std. error</dt>
-          <dd className="tabular mt-1 font-mono text-sm">±{(se * 100).toFixed(2)}</dd>
+          <dd className="tabular mt-1 font-mono text-body">±{(se * 100).toFixed(2)}</dd>
         </div>
         <div className="bg-surface px-3 py-3">
           <dt className="eyebrow">Home win</dt>
-          <dd className="tabular mt-1 font-mono text-sm text-alpha">{pct(probabilities.home)}</dd>
+          <dd className="tabular mt-1 font-mono text-body text-alpha">{pct(probabilities.home)}</dd>
         </div>
         <div className="bg-surface px-3 py-3">
           <dt className="eyebrow">State</dt>
-          <dd className="mt-1 font-mono text-sm">
+          <dd className="mt-1 font-mono text-body">
             {settled ? (
               <span className="text-up">converged</span>
             ) : (
@@ -119,7 +119,7 @@ export function ConvergenceHero() {
         </div>
       </dl>
 
-      <p className="mt-4 text-[11px] leading-relaxed text-muted">
+      <p className="mt-4 text-fine leading-relaxed text-muted">
         Illustrative simulation running in your browser on sample inputs. It shows how an
         estimate stabilises as paths accumulate — it is not a forecast of a real fixture.
       </p>

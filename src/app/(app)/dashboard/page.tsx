@@ -4,9 +4,11 @@ import { getProfile } from '@/lib/auth/server';
 import { PageHeader } from '@/components/app/page-header';
 import { FixtureCard } from '@/components/app/fixture-card';
 import { MatchCard } from '@/components/app/match-card';
-import { Stat } from '@/components/ui/stat';
+import { MetricCard } from '@/components/ui/metric-card';
+import { AppIcon } from '@/components/ui/icon';
 import { DemoBadge, LiveDataBadge } from '@/components/ui/badge';
-import { EmptyState } from '@/components/ui/states';
+import { EmptyState, Note } from '@/components/ui/states';
+import { ButtonLink } from '@/components/ui/button';
 import { getPlan, formatLimit } from '@/lib/config/plans';
 import { DEMO_REASON_COPY, getFixtureFeed } from '@/lib/sports/data-source';
 import { pct } from '@/lib/utils';
@@ -14,48 +16,86 @@ import { pct } from '@/lib/utils';
 export const metadata: Metadata = { title: 'Dashboard' };
 export const dynamic = 'force-dynamic';
 
+/** Server clocks run in UTC, which is within an hour or two of the
+    audience this product serves — close enough for a greeting, and it
+    avoids a heading that rewrites itself after hydration. */
+function greeting(hour: number): string {
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
 export default async function DashboardPage() {
   const profile = await getProfile();
   const plan = getPlan(profile?.plan);
   const firstName = profile?.full_name?.split(' ')[0];
+  const now = new Date();
 
   // Today, in UTC — the same window the sync service imports.
-  const startOfDay = new Date();
+  const startOfDay = new Date(now);
   startOfDay.setUTCHours(0, 0, 0, 0);
   const endOfDay = new Date(startOfDay.getTime() + 86_400_000 - 1);
 
   const feed = await getFixtureFeed({ from: startOfDay, to: endOfDay, limit: 60 });
+  const runsHint = `of ${formatLimit(plan.limits.monteCarloRunsDaily)} per day on ${plan.name}`;
 
   return (
     <>
       <PageHeader
-        eyebrow={new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}
-        title={firstName ? `Welcome back, ${firstName}` : 'Welcome back'}
+        eyebrow={now.toLocaleDateString('en-GB', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+        })}
+        title={firstName ? `${greeting(now.getUTCHours())}, ${firstName}` : greeting(now.getUTCHours())}
         description={
           feed.mode === 'REAL'
-            ? "Today's fixtures, as imported from the data provider."
-            : "Today's fixtures with their current model output."
+            ? 'Live market intelligence for today.'
+            : 'Sample market intelligence, until the first sync completes.'
         }
         actions={feed.mode === 'REAL' ? <LiveDataBadge /> : <DemoBadge />}
       />
 
+      {feed.mode === 'DEMO' && (
+        <Note tone="warning" className="mb-6">
+          {DEMO_REASON_COPY[feed.reason]}
+        </Note>
+      )}
+
       {feed.mode === 'REAL' ? (
-        <RealDashboard feed={feed} monteCarloLimit={formatLimit(plan.limits.monteCarloRunsDaily)} planName={plan.name} />
+        <RealDashboard feed={feed} runsHint={runsHint} />
       ) : (
-        <DemoDashboard feed={feed} monteCarloLimit={formatLimit(plan.limits.monteCarloRunsDaily)} planName={plan.name} />
+        <DemoDashboard feed={feed} runsHint={runsHint} />
       )}
     </>
   );
 }
 
+/** One heading treatment for both variants of the fixture section. */
+function SectionHeading({ title, count }: { title: string; count: number }) {
+  return (
+    <div className="flex items-center justify-between gap-4 pb-4">
+      <h2 className="font-display text-h2 font-semibold">
+        {title}
+        <span className="tabular ml-2 font-mono text-body font-normal text-muted">{count}</span>
+      </h2>
+      <Link
+        href="/matches"
+        className="inline-flex min-h-touch items-center gap-1.5 text-small text-muted transition-colors duration-fast hover:text-ink sm:min-h-0"
+      >
+        All matches
+        <AppIcon name="forward" size={16} />
+      </Link>
+    </div>
+  );
+}
+
 function RealDashboard({
   feed,
-  monteCarloLimit,
-  planName,
+  runsHint,
 }: {
   feed: Extract<Awaited<ReturnType<typeof getFixtureFeed>>, { mode: 'REAL' }>;
-  monteCarloLimit: string;
-  planName: string;
+  runsHint: string;
 }) {
   const fixtures = feed.fixtures;
   const finished = fixtures.filter((fixture) => fixture.status === 'finished').length;
@@ -63,29 +103,42 @@ function RealDashboard({
 
   return (
     <>
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Today's fixtures" value={String(fixtures.length)} hint="Imported for today" />
-        <Stat label="In play" value={String(live)} hint="Currently under way" accent />
-        <Stat label="Completed" value={String(finished)} hint="Final score stored" />
-        <Stat
-          label="Monte Carlo runs"
-          value="0"
-          hint={`${monteCarloLimit} per day on ${planName}`}
+      <section aria-label="Today at a glance" className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <MetricCard
+          label="Fixtures"
+          value={String(fixtures.length)}
+          hint="Imported for today"
+          icon="matches"
         />
+        <MetricCard
+          label="In play"
+          value={String(live)}
+          hint="Currently under way"
+          icon="live"
+          accent={live > 0}
+        />
+        <MetricCard
+          label="Completed"
+          value={String(finished)}
+          hint="Final score stored"
+          icon="check"
+        />
+        <MetricCard label="Monte Carlo runs" value="0" hint={runsHint} icon="simulation" />
       </section>
 
       <section className="mt-10">
-        <div className="flex items-center justify-between pb-4">
-          <h2 className="font-display text-lg font-semibold tracking-tight">Today&apos;s fixtures</h2>
-          <Link href="/matches" className="text-sm text-muted hover:text-ink">
-            All matches
-          </Link>
-        </div>
+        <SectionHeading title="Today’s fixtures" count={fixtures.length} />
 
         {fixtures.length === 0 ? (
           <EmptyState
-            title="No fixtures today"
+            icon="matches"
+            title="No fixtures found."
             description="None of the covered competitions play today. The next fortnight is on the matches page."
+            action={
+              <ButtonLink href="/matches" variant="secondary" size="sm" icon="matches">
+                Choose another date
+              </ButtonLink>
+            }
           />
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -96,56 +149,57 @@ function RealDashboard({
         )}
       </section>
 
-      <p className="mt-8 rounded-xl border border-line bg-surface/50 px-4 py-3 text-xs leading-relaxed text-muted">
+      <Note className="mt-8">
         Fixtures on this page are real and stored as reported. They carry no model output yet —
         probabilities appear once the quantitative engine is connected.
-      </p>
+      </Note>
     </>
   );
 }
 
 function DemoDashboard({
   feed,
-  monteCarloLimit,
-  planName,
+  runsHint,
 }: {
   feed: Extract<Awaited<ReturnType<typeof getFixtureFeed>>, { mode: 'DEMO' }>;
-  monteCarloLimit: string;
-  planName: string;
+  runsHint: string;
 }) {
   const matches = feed.matches;
 
   const averageConfidence =
-    matches.reduce((sum, m) => sum + m.confidence, 0) / Math.max(matches.length, 1);
+    matches.reduce((sum, match) => sum + match.confidence, 0) / Math.max(matches.length, 1);
 
-  // A "signal" here means the model and the market disagree enough to be
-  // worth a look. It is not a recommendation to act.
-  const signals = matches.filter((m) => m.confidence >= 0.7 && m.risk <= 0.45).length;
+  // A "signal" here means the model is confident and the simulated
+  // outcomes are tightly clustered. It is not a recommendation to act.
+  const signals = matches.filter((match) => match.confidence >= 0.7 && match.risk <= 0.45).length;
 
   return (
     <>
-      <p className="mb-6 rounded-lg border border-alpha/25 bg-alpha/[0.06] px-4 py-3 text-sm text-muted">
-        {DEMO_REASON_COPY[feed.reason]}
-      </p>
-
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Today's matches" value={String(matches.length)} hint="In the demo catalogue" />
-        <Stat label="Value signals" value={String(signals)} hint="High confidence, low dispersion" accent />
-        <Stat label="Average confidence" value={pct(averageConfidence, 0)} hint="Across today's slate" />
-        <Stat
-          label="Monte Carlo runs"
-          value="0"
-          hint={`${monteCarloLimit} per day on ${planName}`}
+      <section aria-label="Today at a glance" className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <MetricCard
+          label="Fixtures"
+          value={String(matches.length)}
+          hint="In the sample catalogue"
+          icon="matches"
         />
+        <MetricCard
+          label="Value signals"
+          value={String(signals)}
+          hint="High confidence, low dispersion"
+          icon="up"
+          accent={signals > 0}
+        />
+        <MetricCard
+          label="Average confidence"
+          value={pct(averageConfidence, 0)}
+          hint="Across today’s slate"
+          icon="gauge"
+        />
+        <MetricCard label="Monte Carlo runs" value="0" hint={runsHint} icon="simulation" />
       </section>
 
       <section className="mt-10">
-        <div className="flex items-center justify-between pb-4">
-          <h2 className="font-display text-lg font-semibold tracking-tight">Today&apos;s analysis</h2>
-          <Link href="/matches" className="text-sm text-muted hover:text-ink">
-            All matches
-          </Link>
-        </div>
+        <SectionHeading title="Today’s analysis" count={matches.length} />
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {matches.map((match) => (
@@ -154,10 +208,10 @@ function DemoDashboard({
         </div>
       </section>
 
-      <p className="mt-8 rounded-xl border border-alpha/25 bg-alpha/[0.05] px-4 py-3 text-xs leading-relaxed text-muted">
+      <Note tone="warning" className="mt-8">
         Figures on this page come from a sample dataset used to build the interface. Live fixtures
         and model output arrive when the sports-data feed and quantitative engine are connected.
-      </p>
+      </Note>
     </>
   );
 }

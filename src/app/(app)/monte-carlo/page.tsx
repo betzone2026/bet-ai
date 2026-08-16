@@ -15,9 +15,9 @@ export default async function MonteCarloPage({
   return (
     <>
       <PageHeader
-        eyebrow="Simulation"
-        title="Monte Carlo"
-        description="Play a fixture out thousands of times and read the distribution that comes back."
+        eyebrow="Monte Carlo"
+        title="Simulation Lab"
+        description="Play a fixture out thousands of times and read the distribution that comes back. Nothing is stored against the fixture — a run is yours, configured here."
       />
       <MonteCarloConsole plan={profile?.plan ?? 'free'} initialMatchId={query.match} />
     </>

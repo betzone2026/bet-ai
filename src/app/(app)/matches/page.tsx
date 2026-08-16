@@ -2,8 +2,10 @@ import type { Metadata } from 'next';
 import { PageHeader } from '@/components/app/page-header';
 import { FixtureCard } from '@/components/app/fixture-card';
 import { MatchCard } from '@/components/app/match-card';
+import { ChipNav } from '@/components/ui/tabs';
 import { DemoBadge, LiveDataBadge } from '@/components/ui/badge';
-import { EmptyState } from '@/components/ui/states';
+import { EmptyState, Note } from '@/components/ui/states';
+import { ButtonLink } from '@/components/ui/button';
 import { SUPPORTED_LEAGUES, SUPPORTED_LEAGUE_KEYS } from '@/lib/sports/config';
 import { DEMO_REASON_COPY, getFixtureFeed } from '@/lib/sports/data-source';
 import type { MatchView } from '@/lib/types/domain';
@@ -50,6 +52,8 @@ export default async function MatchesPage({
           label: league,
         }));
 
+  const count = feed.mode === 'REAL' ? feed.fixtures.length : feed.matches.length;
+
   return (
     <>
       <PageHeader
@@ -64,35 +68,49 @@ export default async function MatchesPage({
       />
 
       {feed.mode === 'DEMO' && (
-        <p className="mb-6 rounded-lg border border-alpha/25 bg-alpha/[0.06] px-4 py-3 text-sm text-muted">
+        <Note tone="warning" className="mb-6">
           {DEMO_REASON_COPY[feed.reason]}
-        </p>
+        </Note>
       )}
 
-      <div className="flex flex-wrap gap-2 pb-6">
-        <FilterChip href="/matches" label="All" active={!active} />
-        {leagues.map((league) => (
-          <FilterChip
-            key={league.value}
-            href={`/matches?league=${encodeURIComponent(league.value)}`}
-            label={league.label}
-            active={active === league.value}
-          />
-        ))}
-      </div>
+      {/* Filters are links, so a filtered view can be shared and survives a
+          reload — the same reason the admin section navigation is links. */}
+      <ChipNav
+        label="Competition"
+        className="pb-6"
+        items={[
+          { href: '/matches', label: 'All', active: !active, icon: 'leagues' },
+          ...leagues.map((league) => ({
+            href: `/matches?league=${encodeURIComponent(league.value)}`,
+            label: league.label,
+            active: active === league.value,
+          })),
+        ]}
+      />
 
       {feed.mode === 'REAL' ? (
         feed.fixtures.length === 0 ? (
           <EmptyState
-            title="No fixtures in this window"
-            description="Nothing has been imported for this competition in the next fortnight. Clear the filter, or run a sync from the admin area."
+            icon="matches"
+            title="No fixtures found."
+            description="No supported fixtures were returned for this competition in the next fortnight. Clear the filter, or run a sync from the admin area."
+            action={
+              <ButtonLink href="/matches" variant="secondary" size="sm">
+                Clear filter
+              </ButtonLink>
+            }
           />
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {feed.fixtures.map((fixture) => (
-              <FixtureCard key={fixture.id} fixture={fixture} />
-            ))}
-          </div>
+          <>
+            <p className="eyebrow pb-3">
+              {count} fixture{count === 1 ? '' : 's'}
+            </p>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {feed.fixtures.map((fixture) => (
+                <FixtureCard key={fixture.id} fixture={fixture} />
+              ))}
+            </div>
+          </>
         )
       ) : (
         <DemoGrid matches={feed.matches} active={active} />
@@ -107,32 +125,28 @@ function DemoGrid({ matches, active }: { matches: MatchView[]; active?: string }
   if (visible.length === 0) {
     return (
       <EmptyState
-        title="No fixtures in this league today"
-        description="Pick another competition, or clear the filter to see the full slate."
+        icon="matches"
+        title="No fixtures found."
+        description="This competition has nothing in the sample set. Pick another, or clear the filter to see the full slate."
+        action={
+          <ButtonLink href="/matches" variant="secondary" size="sm">
+            Clear filter
+          </ButtonLink>
+        }
       />
     );
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {visible.map((match) => (
-        <MatchCard key={match.id} match={match} />
-      ))}
-    </div>
-  );
-}
-
-function FilterChip({ href, label, active }: { href: string; label: string; active: boolean }) {
-  return (
-    <a
-      href={href}
-      className={
-        active
-          ? 'rounded-lg border border-alpha/45 bg-alpha/10 px-3 py-1.5 text-xs text-alpha'
-          : 'rounded-lg border border-line bg-surface px-3 py-1.5 text-xs text-muted hover:text-ink'
-      }
-    >
-      {label}
-    </a>
+    <>
+      <p className="eyebrow pb-3">
+        {visible.length} fixture{visible.length === 1 ? '' : 's'}
+      </p>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {visible.map((match) => (
+          <MatchCard key={match.id} match={match} />
+        ))}
+      </div>
+    </>
   );
 }

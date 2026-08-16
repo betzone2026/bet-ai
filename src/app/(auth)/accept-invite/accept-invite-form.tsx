@@ -83,7 +83,7 @@ export function AcceptInviteForm() {
         value={confirm}
         onChange={(e) => setConfirm(e.target.value)}
       />
-      <Button type="submit" className="w-full" disabled={pending}>
+      <Button type="submit" className="w-full" loading={pending} disabled={pending}>
         {pending ? 'Setting up…' : 'Accept invitation'}
       </Button>
     </form>

@@ -44,7 +44,7 @@ export function RegisterForm() {
     return (
       <div className="space-y-4">
         <FormNotice message={`Verification email sent to ${email}.`} />
-        <p className="text-sm leading-relaxed text-muted">
+        <p className="text-small leading-relaxed text-muted">
           Open the link in that message to confirm your address and finish setting up your
           account. The link expires in 24 hours.
         </p>
@@ -84,11 +84,11 @@ export function RegisterForm() {
         hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}
       />
 
-      <Button type="submit" className="w-full" disabled={pending}>
+      <Button type="submit" className="w-full" loading={pending} disabled={pending}>
         {pending ? 'Creating account…' : 'Create account'}
       </Button>
 
-      <p className="text-[11px] leading-relaxed text-muted">
+      <p className="text-fine leading-relaxed text-muted">
         You must be 18 or older. By continuing you accept the Terms and confirm you have read the
         Risk disclosure.
       </p>

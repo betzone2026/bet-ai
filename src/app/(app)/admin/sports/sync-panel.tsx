@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
+import { AppIcon } from '@/components/ui/icon';
 import type { LeagueKey } from '@/lib/sports/config';
 import { isIsoDate, syncDateBounds, validateSyncDate } from '@/lib/sports/dates';
 
@@ -164,8 +165,8 @@ export function SyncPanel({
   }
 
   return (
-    <div className="flex w-full flex-col gap-3 sm:min-w-[26rem]">
-      <div className="flex flex-wrap items-end justify-end gap-2">
+    <div className="flex w-full flex-col gap-3">
+      <div className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col gap-1">
           <span className="eyebrow">Date</span>
           <input
@@ -175,7 +176,7 @@ export function SyncPanel({
             max={bounds.max}
             required
             onChange={(event) => setDate(event.target.value)}
-            className="h-8 rounded-lg border border-line bg-raised px-2.5 font-mono text-xs text-ink focus-visible:outline-none focus-visible:border-muted/60"
+            className="min-h-touch rounded-lg border border-line bg-raised px-2.5 font-mono text-small text-ink focus-visible:border-alpha sm:min-h-0 sm:h-9"
             aria-label="Fixture date to check or sync (YYYY-MM-DD, UTC)"
             aria-invalid={dateError !== null}
           />
@@ -184,24 +185,33 @@ export function SyncPanel({
           type="button"
           size="sm"
           variant="secondary"
+          icon="search"
+          loading={busy === 'check'}
           onClick={() => void post('check')}
           disabled={blocked}
         >
           {busy === 'check' ? 'Checking…' : 'Check fixtures'}
         </Button>
-        <Button type="button" size="sm" onClick={() => void post('sync')} disabled={blocked}>
-          {busy === 'sync' ? 'Syncing…' : 'Sync now'}
+        <Button
+          type="button"
+          size="sm"
+          icon="refresh"
+          loading={busy === 'sync'}
+          onClick={() => void post('sync')}
+          disabled={blocked}
+        >
+          {busy === 'sync' ? 'Syncing…' : 'Sync fixtures'}
         </Button>
       </div>
 
-      <p className="text-right text-xs text-muted">
+      <p className="text-fine leading-relaxed text-muted">
         Check and Sync each cost 1 API request against {leagues.length} configured competition
         {leagues.length === 1 ? '' : 's'}. Check writes nothing.
       </p>
 
-      {dateError && <p className="text-right text-xs text-down">{dateError}</p>}
+      {dateError && <p className="text-fine text-down">{dateError}</p>}
       {disabled && disabledReason && (
-        <p className="text-right text-xs text-muted">{disabledReason}</p>
+        <p className="text-fine text-muted">{disabledReason}</p>
       )}
 
       {outcome && (
@@ -214,25 +224,36 @@ export function SyncPanel({
             {outcome.kind === 'check' ? 'Check fixtures' : 'Sync'}
             {outcome.cost ? ` · ${outcome.cost}` : ''}
           </p>
-          <p className={`mt-1 text-xs leading-relaxed ${outcome.ok ? 'text-ink' : 'text-down'}`}>
+          <p className={`mt-1 text-small leading-relaxed ${outcome.ok ? 'text-ink' : 'text-down'}`}>
             {outcome.headline}
           </p>
           {outcome.counts && (
-            <p className="tabular mt-1.5 font-mono text-xs text-muted">{outcome.counts}</p>
+            <p className="tabular mt-1.5 font-mono text-fine text-muted">{outcome.counts}</p>
           )}
           {outcome.detail && (
-            <p className="tabular mt-1 font-mono text-xs text-muted">{outcome.detail}</p>
+            <p className="tabular mt-1 font-mono text-fine text-muted">{outcome.detail}</p>
           )}
 
           {outcome.competitions.length > 0 && (
-            <div className="mt-3 max-h-64 overflow-y-auto rounded-lg border border-line">
-              <table className="w-full text-xs">
+            <div className="mt-3 max-h-64 overflow-auto rounded-lg border border-line">
+              <table className="w-full text-fine">
+                <caption className="sr-only">
+                  Competitions the provider returned for this date
+                </caption>
                 <thead className="sticky top-0 border-b border-line bg-surface">
                   <tr>
-                    <th className="eyebrow px-2.5 py-2 text-left font-normal">Competition</th>
-                    <th className="eyebrow px-2.5 py-2 text-left font-normal">League ID</th>
-                    <th className="eyebrow px-2.5 py-2 text-left font-normal">Country</th>
-                    <th className="eyebrow px-2.5 py-2 text-right font-normal">Fixtures</th>
+                    <th scope="col" className="eyebrow px-2.5 py-2 text-left font-normal">
+                      Competition
+                    </th>
+                    <th scope="col" className="eyebrow px-2.5 py-2 text-left font-normal">
+                      League ID
+                    </th>
+                    <th scope="col" className="eyebrow px-2.5 py-2 text-left font-normal">
+                      Country
+                    </th>
+                    <th scope="col" className="eyebrow px-2.5 py-2 text-right font-normal">
+                      Fixtures
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
@@ -243,9 +264,12 @@ export function SyncPanel({
                     >
                       <td className="max-w-[18ch] truncate px-2.5 py-1.5">
                         {competition.supported && (
-                          <span className="mr-1.5 font-mono text-up" aria-label="matched">
-                            ✓
-                          </span>
+                          <AppIcon
+                            name="check"
+                            size={16}
+                            className="mr-1.5 inline h-3 w-3 text-up"
+                            label="Supported competition"
+                          />
                         )}
                         {competition.name}
                       </td>

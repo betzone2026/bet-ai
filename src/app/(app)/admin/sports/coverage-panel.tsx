@@ -3,6 +3,9 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
+import { Badge, type BadgeVariant } from '@/components/ui/badge';
+import { Card, CardBody } from '@/components/ui/card';
+import { DataTable, type Column } from '@/components/ui/data-table';
 
 /**
  * Season and coverage diagnostic, rendered from the stored reading.
@@ -61,11 +64,11 @@ const VERDICT_LABEL: Record<CoverageRowView['verdict'], string> = {
   OK: 'fixtures available',
 };
 
-const VERDICT_CLASS: Record<CoverageRowView['verdict'], string> = {
-  UNCHECKED: 'text-muted',
-  ERROR: 'text-down',
-  NO_FIXTURES: 'text-alpha',
-  OK: 'text-up',
+const VERDICT_VARIANT: Record<CoverageRowView['verdict'], BadgeVariant> = {
+  UNCHECKED: 'neutral',
+  ERROR: 'danger',
+  NO_FIXTURES: 'warning',
+  OK: 'success',
 };
 
 type CoverageResponseRow = NonNullable<CoveragePayload['verification']>['rows'][number];
@@ -142,62 +145,98 @@ export function CoveragePanel({
     }
   }
 
+  const columns: Array<Column<CoverageRowView>> = [
+    {
+      key: 'competition',
+      header: 'Competition',
+      primary: true,
+      cell: (row) => (
+        <span className="block">
+          <span className="block truncate font-medium text-ink">{row.name ?? row.leagueKey}</span>
+          <span className="block text-fine text-muted">{row.country ?? '—'}</span>
+        </span>
+      ),
+    },
+    {
+      key: 'providerId',
+      header: 'League ID',
+      numeric: true,
+      cell: (row) => row.providerLeagueId ?? '—',
+    },
+    {
+      key: 'current',
+      header: 'Current',
+      align: 'right',
+      numeric: true,
+      cell: (row) => row.currentSeason ?? '—',
+    },
+    {
+      key: 'latest',
+      header: 'Latest',
+      align: 'right',
+      numeric: true,
+      hideOnMobile: true,
+      cell: (row) => (
+        <span
+          title={row.seasonYears.length > 0 ? `Seasons: ${row.seasonYears.join(', ')}` : undefined}
+        >
+          {row.latestSeason ?? '—'}
+        </span>
+      ),
+    },
+    {
+      key: 'coverage',
+      header: 'Coverage',
+      align: 'right',
+      cell: (row) => <Badge variant={VERDICT_VARIANT[row.verdict]}>{VERDICT_LABEL[row.verdict]}</Badge>,
+    },
+    {
+      key: 'checked',
+      header: 'Checked',
+      align: 'right',
+      numeric: true,
+      hideOnMobile: true,
+      cell: (row) => row.checkedAt ?? 'never',
+    },
+  ];
+
   return (
     <div>
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-        <p className="text-xs leading-relaxed text-muted">
-          Read from the provider, not assumed. A refresh costs {cost === 0 ? 'nothing while the stored reading is current' : `${cost} API request${cost === 1 ? '' : 's'}`}.
-        </p>
-        <Button type="button" size="sm" variant="secondary" onClick={() => void refresh()} disabled={disabled || busy}>
-          {busy ? 'Checking…' : 'Re-check seasons'}
-        </Button>
-      </div>
+      <Card className="mb-3">
+        <CardBody className="flex flex-wrap items-center justify-between gap-3">
+          <p className="max-w-prose text-fine leading-relaxed text-muted">
+            Read from the provider, not assumed. A refresh costs {cost === 0 ? 'nothing while the stored reading is current' : `${cost} API request${cost === 1 ? '' : 's'}`}.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            icon="refresh"
+            loading={busy}
+            onClick={() => void refresh()}
+            disabled={disabled || busy}
+          >
+            {busy ? 'Checking…' : 'Re-check seasons'}
+          </Button>
+        </CardBody>
+        {note && (
+          <p
+            className={`border-t border-line px-4 py-2.5 text-small ${note.ok ? 'text-muted' : 'text-down'}`}
+          >
+            {note.text}
+          </p>
+        )}
+      </Card>
 
-      {note && (
-        <p className={`px-4 pb-3 text-xs ${note.ok ? 'text-muted' : 'text-down'}`}>{note.text}</p>
-      )}
-
-      <table className="w-full text-sm">
-        <thead className="border-y border-line">
-          <tr>
-            <th className="eyebrow px-4 py-2.5 text-left font-normal">Competition</th>
-            <th className="eyebrow px-4 py-2.5 text-left font-normal">League ID</th>
-            <th className="eyebrow px-4 py-2.5 text-right font-normal">Current</th>
-            <th className="eyebrow px-4 py-2.5 text-right font-normal">Latest</th>
-            <th className="eyebrow px-4 py-2.5 text-right font-normal">Coverage</th>
-            <th className="eyebrow px-4 py-2.5 text-right font-normal">Checked</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-line">
-          {current.map((row) => (
-            <tr key={row.leagueKey}>
-              <td className="px-4 py-2.5">
-                <span className="block max-w-[22ch] truncate">{row.name ?? row.leagueKey}</span>
-                <span className="text-xs text-muted">{row.country ?? '—'}</span>
-              </td>
-              <td className="px-4 py-2.5 font-mono text-xs">{row.providerLeagueId ?? '—'}</td>
-              <td className="tabular px-4 py-2.5 text-right font-mono text-xs">
-                {row.currentSeason ?? '—'}
-              </td>
-              <td
-                className="tabular px-4 py-2.5 text-right font-mono text-xs text-muted"
-                title={row.seasonYears.length > 0 ? `Seasons: ${row.seasonYears.join(', ')}` : undefined}
-              >
-                {row.latestSeason ?? '—'}
-              </td>
-              <td className={`px-4 py-2.5 text-right font-mono text-xs ${VERDICT_CLASS[row.verdict]}`}>
-                {VERDICT_LABEL[row.verdict]}
-              </td>
-              <td className="px-4 py-2.5 text-right font-mono text-xs text-muted">
-                {row.checkedAt ?? 'never'}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DataTable
+        columns={columns}
+        rows={current}
+        rowKey={(row) => row.leagueKey}
+        caption="Season coverage per configured competition, as last read from the provider"
+      />
 
       {current.some((row) => row.error) && (
-        <ul className="space-y-1 px-4 py-3 text-xs text-down">
+        <ul className="mt-3 space-y-1 text-fine text-down">
           {current
             .filter((row) => row.error)
             .map((row) => (

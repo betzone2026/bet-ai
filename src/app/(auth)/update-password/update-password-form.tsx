@@ -62,7 +62,7 @@ export function UpdatePasswordForm() {
         value={confirm}
         onChange={(e) => setConfirm(e.target.value)}
       />
-      <Button type="submit" className="w-full" disabled={pending}>
+      <Button type="submit" className="w-full" loading={pending} disabled={pending}>
         {pending ? 'Saving…' : 'Update password'}
       </Button>
     </form>

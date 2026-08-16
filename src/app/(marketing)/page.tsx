@@ -14,13 +14,13 @@ export default function HomePage() {
           <div className="animate-fade-up">
             <p className="eyebrow">AI-powered sports probability intelligence</p>
 
-            <h1 className="mt-5 font-display text-[2.75rem] font-bold leading-[1.04] tracking-[-0.03em] sm:text-6xl">
+            <h1 className="mt-5 font-display text-hero font-bold sm:text-hero-lg">
               Turn sports data
               <br />
               into <span className="text-alpha">probabilities</span>.
             </h1>
 
-            <p className="mt-6 max-w-xl text-lg leading-relaxed text-muted">
+            <p className="mt-6 max-w-xl text-lead text-muted">
               SportAlpha AI transforms sports data into actionable probability intelligence
               using statistical models, machine learning and Monte Carlo simulations.
             </p>
@@ -37,15 +37,15 @@ export default function HomePage() {
             <dl className="mt-12 grid max-w-lg grid-cols-3 gap-6 border-t border-line pt-7">
               <div>
                 <dt className="eyebrow">Paths per run</dt>
-                <dd className="tabular mt-1.5 font-mono text-xl">500k</dd>
+                <dd className="tabular mt-1.5 font-mono text-data-sm">500k</dd>
               </div>
               <div>
                 <dt className="eyebrow">Models</dt>
-                <dd className="tabular mt-1.5 font-mono text-xl">Poisson · Elo</dd>
+                <dd className="tabular mt-1.5 font-mono text-data-sm">Poisson · Elo</dd>
               </div>
               <div>
                 <dt className="eyebrow">Output</dt>
-                <dd className="tabular mt-1.5 font-mono text-xl">1X2 · O/U · BTTS</dd>
+                <dd className="tabular mt-1.5 font-mono text-data-sm">1X2 · O/U · BTTS</dd>
               </div>
             </dl>
           </div>
@@ -63,10 +63,10 @@ export default function HomePage() {
       {/* Closing ---------------------------------------------------- */}
       <section className="border-t border-line py-20 sm:py-24">
         <div className="mx-auto max-w-shell px-5 text-center lg:px-8">
-          <h2 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+          <h2 className="font-display text-section font-semibold sm:text-section-lg">
             Start with the free tier
           </h2>
-          <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-muted">
+          <p className="mx-auto mt-4 max-w-xl text-lead text-muted">
             Three analyses a day, 10,000-path simulations and the AI Analyst. No card required.
           </p>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">

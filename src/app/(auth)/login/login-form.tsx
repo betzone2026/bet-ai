@@ -73,12 +73,15 @@ export function LoginForm() {
           onChange={(e) => setPassword(e.target.value)}
           placeholder="••••••••"
         />
-        <Link href="/reset-password" className="mt-2 inline-block text-xs text-muted hover:text-ink">
+        <Link
+          href="/reset-password"
+          className="mt-2 inline-block text-fine text-muted transition-colors duration-fast hover:text-ink"
+        >
           Forgot your password?
         </Link>
       </div>
 
-      <Button type="submit" className="w-full" disabled={pending}>
+      <Button type="submit" className="w-full" loading={pending} disabled={pending}>
         {pending ? 'Logging in…' : 'Log in'}
       </Button>
     </form>

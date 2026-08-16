@@ -26,29 +26,40 @@ export function ProfileForm({ initialName, email }: { initialName: string; email
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <label className="block">
-        <span className="eyebrow">Email</span>
+    <form onSubmit={handleSubmit} className="space-y-5">
+      <div>
+        <label className="eyebrow block" htmlFor="settings-email">
+          Email
+        </label>
         <input
+          id="settings-email"
           value={email}
           readOnly
-          className="mt-1.5 h-10 w-full rounded-lg border border-line bg-base/60 px-3 text-sm text-muted"
+          aria-describedby="settings-email-hint"
+          className="mt-1.5 min-h-touch w-full rounded-lg border border-line bg-base/60 px-3 text-small text-muted sm:min-h-0 sm:h-10"
         />
-        <span className="mt-1.5 block text-xs text-muted">
+        <p id="settings-email-hint" className="mt-1.5 text-fine text-muted">
           Contact support to change the address on your account.
-        </span>
-      </label>
+        </p>
+      </div>
 
-      <label className="block">
-        <span className="eyebrow">Display name</span>
+      <div>
+        <label className="eyebrow block" htmlFor="settings-name">
+          Display name
+        </label>
         <input
+          id="settings-name"
           value={fullName}
           onChange={(e) => setFullName(e.target.value)}
-          className="mt-1.5 h-10 w-full rounded-lg border border-line bg-base px-3 text-sm focus:border-alpha focus:outline-none"
+          autoComplete="name"
+          className="mt-1.5 min-h-touch w-full rounded-lg border border-line bg-base px-3 text-small focus:border-alpha sm:min-h-0 sm:h-10"
         />
-      </label>
+        <p className="mt-1.5 text-fine text-muted">
+          Used for the greeting on your dashboard and nowhere else.
+        </p>
+      </div>
 
-      <Button type="submit" disabled={pending}>
+      <Button type="submit" icon="check" loading={pending}>
         {pending ? 'Saving…' : 'Save changes'}
       </Button>
     </form>

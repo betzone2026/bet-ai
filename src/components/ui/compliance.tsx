@@ -8,6 +8,6 @@ export const DISCLAIMER =
 
 export function DisclaimerNote({ className }: { className?: string }) {
   return (
-    <p className={className ?? 'text-xs leading-relaxed text-muted'}>{DISCLAIMER}</p>
+    <p className={className ?? 'text-fine leading-relaxed text-muted'}>{DISCLAIMER}</p>
   );
 }

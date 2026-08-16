@@ -42,7 +42,7 @@ export function ResetForm() {
         placeholder="you@example.com"
       />
 
-      <Button type="submit" className="w-full" disabled={pending || sent}>
+      <Button type="submit" className="w-full" loading={pending} disabled={pending || sent}>
         {pending ? 'Sending…' : 'Send reset link'}
       </Button>
     </form>

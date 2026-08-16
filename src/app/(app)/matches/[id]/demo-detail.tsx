@@ -3,18 +3,21 @@
  * dataset. It is shown only when no real fixture matches the id, and every
  * figure on it carries the demo badge.
  *
- * Kept verbatim from Phase A so the two modes can be compared side by side —
- * the real screen below it shows what an imported fixture actually contains,
- * which is a good deal less.
+ * The panels are the same ones the real screen uses; only the source of the
+ * numbers differs. Sections are tabbed rather than stacked because a
+ * modelled fixture carries six distinct readings and a single column of
+ * them buries the one the reader came for.
  */
-import Link from 'next/link';
-import { ArrowLeft } from 'lucide-react';
-import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
-import { ProbabilityBar } from '@/components/ui/probability-bar';
-import { ConfidenceMeter } from '@/components/ui/confidence-meter';
-import { RiskPill, DemoBadge, Badge } from '@/components/ui/badge';
+import { Card, CardBody, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Tabs } from '@/components/ui/tabs';
+import { ProbabilityBar, OutcomeDistribution } from '@/components/ui/probability-bar';
+import { ConfidenceScore } from '@/components/ui/confidence-meter';
+import { BarRow, ProgressBar } from '@/components/ui/progress';
+import { RiskBadge, DemoBadge, Badge } from '@/components/ui/badge';
 import { ButtonLink } from '@/components/ui/button';
-import { formatMatchDate, pct, impliedOdds } from '@/lib/utils';
+import { Note } from '@/components/ui/states';
+import { MatchHeader } from '@/components/app/match-header';
+import { formatKickoff, pct, impliedOdds } from '@/lib/utils';
 import type { MatchView, TeamStats } from '@/lib/types/domain';
 
 export function DemoMatchDetail({ match }: { match: MatchView }) {
@@ -33,27 +36,110 @@ export function DemoMatchDetail({ match }: { match: MatchView }) {
 
   return (
     <>
-      <Link href="/matches" className="mb-5 inline-flex items-center gap-2 text-sm text-muted hover:text-ink">
-        <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
-        All matches
-      </Link>
+      <MatchHeader
+        league={match.league}
+        country={match.country}
+        kickoff={match.kickoff}
+        homeTeam={match.homeTeam}
+        awayTeam={match.awayTeam}
+        homeScore={match.homeScore}
+        awayScore={match.awayScore}
+        status={formatKickoff(match.kickoff)}
+        badges={<DemoBadge />}
+        actions={
+          <>
+            <ButtonLink href={`/monte-carlo?match=${match.id}`} size="sm" variant="secondary" icon="simulation">
+              Run simulation
+            </ButtonLink>
+            <ButtonLink href={`/ai-analyst?match=${match.id}`} size="sm" icon="analyst">
+              Ask the analyst
+            </ButtonLink>
+          </>
+        }
+      />
 
-      {/* Fixture header ------------------------------------------------ */}
-      <header className="rounded-2xl border border-line bg-surface p-5 hairline-top sm:p-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge>{match.league}</Badge>
-          <Badge>{match.country}</Badge>
-          {match.demo && <DemoBadge />}
-        </div>
+      <Tabs
+        className="mt-5"
+        label="Fixture sections"
+        tabs={[
+          {
+            id: 'overview',
+            label: 'Overview',
+            icon: 'dashboard',
+            panel: <Overview match={match} />,
+          },
+          {
+            id: 'probability',
+            label: 'Probability',
+            icon: 'sigma',
+            panel: <Probability match={match} outcomes={outcomes} />,
+          },
+          {
+            id: 'statistics',
+            label: 'Statistics',
+            icon: 'apiUsage',
+            panel: (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Team statistics</CardTitle>
+                  <CardDescription>Season to date</CardDescription>
+                </CardHeader>
+                <CardBody>
+                  <StatComparison
+                    home={match.home}
+                    away={match.away}
+                    homeName={match.homeTeam}
+                    awayName={match.awayTeam}
+                  />
+                </CardBody>
+              </Card>
+            ),
+          },
+          {
+            id: 'monte-carlo',
+            label: 'Monte Carlo',
+            icon: 'simulation',
+            panel: <MonteCarloPanel match={match} />,
+          },
+          {
+            id: 'market',
+            label: 'Market',
+            icon: 'wallet',
+            panel: <Market goalsMarkets={goalsMarkets} outcomes={outcomes} />,
+          },
+          {
+            id: 'ai',
+            label: 'AI Analysis',
+            icon: 'analyst',
+            panel: <AnalysisPanel match={match} />,
+          },
+        ]}
+      />
 
-        <h1 className="mt-4 font-display text-2xl font-semibold tracking-tight sm:text-3xl">
-          {match.homeTeam}
-          <span className="px-2 font-normal text-muted">vs</span>
-          {match.awayTeam}
-        </h1>
-        <p className="mt-1.5 font-mono text-xs text-muted">{formatMatchDate(match.kickoff)}</p>
+      <Note className="mt-6">
+        Probabilities describe uncertainty, not certainty. A high figure means the model expects that
+        outcome more often than the alternatives across comparable fixtures — it says nothing about
+        this single match.
+      </Note>
+    </>
+  );
+}
 
-        <div className="mt-6">
+/* ------------------------------------------------------------------
+   Overview: the whole fixture in one screenful.
+   ------------------------------------------------------------------ */
+
+function Overview({ match }: { match: MatchView }) {
+  const best = match.topScores[0]?.probability ?? 1;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-3">
+      <Card className="lg:col-span-2">
+        <CardHeader>
+          <CardTitle>Model distribution</CardTitle>
+          <CardDescription>{match.modelVersion}</CardDescription>
+        </CardHeader>
+        <CardBody className="space-y-5">
           <ProbabilityBar
             probabilities={match.probabilities}
             size="lg"
@@ -61,127 +147,274 @@ export function DemoMatchDetail({ match }: { match: MatchView }) {
             homeLabel={match.homeTeam}
             awayLabel={match.awayTeam}
           />
-        </div>
+          <OutcomeDistribution
+            probabilities={match.probabilities}
+            homeLabel={match.homeTeam}
+            awayLabel={match.awayTeam}
+          />
+        </CardBody>
+      </Card>
 
-        <div className="mt-6 flex flex-wrap items-end gap-6 border-t border-line pt-5">
-          <ConfidenceMeter score={match.confidence} className="w-44" />
-          <div>
-            <p className="eyebrow">Risk</p>
-            <div className="mt-1.5">
-              <RiskPill score={match.risk} />
-            </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Model quality</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-5">
+          <ConfidenceScore score={match.confidence} />
+          <div className="flex items-center justify-between gap-3 border-t border-line pt-4">
+            <span className="eyebrow">Risk</span>
+            <RiskBadge score={match.risk} />
           </div>
-          <div>
-            <p className="eyebrow">Model</p>
-            <p className="mt-1.5 font-mono text-xs">{match.modelVersion}</p>
+          <div className="flex items-center justify-between gap-3">
+            <span className="eyebrow">Model</span>
+            <span className="tabular font-mono text-small">{match.modelVersion}</span>
           </div>
-          <div className="ml-auto flex gap-2">
-            <ButtonLink href={`/monte-carlo?match=${match.id}`} size="sm" variant="secondary">
-              Run simulation
-            </ButtonLink>
-            <ButtonLink href={`/ai-analyst?match=${match.id}`} size="sm">
-              Ask the analyst
-            </ButtonLink>
-          </div>
-        </div>
-      </header>
+        </CardBody>
+      </Card>
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-3">
-        {/* AI probability -------------------------------------------- */}
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Match result</CardTitle>
-            <span className="eyebrow">Fair odds shown for reference</span>
-          </CardHeader>
-          <CardBody className="grid gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-3">
-            {outcomes.map((outcome) => {
-              const odds = impliedOdds(outcome.value);
-              return (
-                <div key={outcome.key} className="bg-surface px-4 py-4">
-                  <div className="flex items-baseline gap-2">
-                    <span className="font-mono text-xs text-alpha">{outcome.tick}</span>
-                    <span className="truncate text-xs text-muted">{outcome.label}</span>
-                  </div>
-                  <p className="tabular mt-2 font-mono text-2xl">{pct(outcome.value)}</p>
-                  <p className="tabular mt-1 font-mono text-[11px] text-muted">
-                    fair {odds ? odds.toFixed(2) : '—'}
-                  </p>
-                </div>
-              );
-            })}
-          </CardBody>
-        </Card>
-
-        {/* Most likely scores ---------------------------------------- */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Most likely scores</CardTitle>
-          </CardHeader>
-          <CardBody className="space-y-2.5">
-            {match.topScores.map((score) => (
-              <div key={`${score.home}-${score.away}`} className="flex items-center gap-3">
-                <span className="tabular w-12 font-mono text-sm">
-                  {score.home}–{score.away}
-                </span>
-                <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-raised">
-                  <div
-                    className="h-full bg-data"
-                    style={{ width: `${(score.probability / match.topScores[0]!.probability) * 100}%` }}
-                  />
-                </div>
-                <span className="tabular w-12 text-right font-mono text-xs text-muted">
-                  {pct(score.probability)}
-                </span>
-              </div>
-            ))}
-          </CardBody>
-        </Card>
-
-        {/* Goals market ---------------------------------------------- */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Goals market</CardTitle>
-          </CardHeader>
-          <CardBody className="space-y-4">
-            {goalsMarkets.map((market) => (
-              <div key={market.label}>
-                <div className="flex items-baseline justify-between">
-                  <span className="text-xs text-muted">{market.label}</span>
-                  <span className="tabular font-mono text-sm">{pct(market.value)}</span>
-                </div>
-                <div className="mt-1.5 h-1.5 overflow-hidden rounded-sm bg-raised">
-                  <div className="h-full bg-alpha" style={{ width: `${market.value * 100}%` }} />
-                </div>
-              </div>
-            ))}
-          </CardBody>
-        </Card>
-
-        {/* Team statistics -------------------------------------------- */}
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Statistics</CardTitle>
-            <span className="eyebrow">Season to date</span>
-          </CardHeader>
-          <CardBody>
-            <StatComparison
-              home={match.home}
-              away={match.away}
-              homeName={match.homeTeam}
-              awayName={match.awayTeam}
+      <Card className="lg:col-span-2">
+        <CardHeader>
+          <CardTitle>Most likely scores</CardTitle>
+          <CardDescription>Scaled against the leading scoreline</CardDescription>
+        </CardHeader>
+        <CardBody className="space-y-2.5">
+          {match.topScores.map((score) => (
+            <BarRow
+              key={`${score.home}-${score.away}`}
+              label={`${score.home}–${score.away}`}
+              value={score.probability}
+              scale={best}
+              display={pct(score.probability)}
+              tone="info"
             />
-          </CardBody>
-        </Card>
-      </div>
+          ))}
+        </CardBody>
+      </Card>
 
-      <p className="mt-6 rounded-xl border border-line bg-surface/50 px-4 py-3 text-xs leading-relaxed text-muted">
-        Probabilities describe uncertainty, not certainty. A high figure means the model expects
-        that outcome more often than the alternatives across comparable fixtures — it says nothing
-        about this single match.
-      </p>
-    </>
+      <Card>
+        <CardHeader>
+          <CardTitle>Goals market</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-3.5">
+          <ProgressBar label="Over 1.5" value={match.goals.over15} valueLabel={pct(match.goals.over15)} size="sm" />
+          <ProgressBar label="Over 2.5" value={match.goals.over25} valueLabel={pct(match.goals.over25)} size="sm" />
+          <ProgressBar label="Over 3.5" value={match.goals.over35} valueLabel={pct(match.goals.over35)} size="sm" />
+          <ProgressBar label="Both to score" value={match.goals.btts} valueLabel={pct(match.goals.btts)} size="sm" />
+        </CardBody>
+      </Card>
+    </div>
   );
 }
+
+/* ------------------------------------------------------------------
+   Probability: the model's own reading, at full size.
+   ------------------------------------------------------------------ */
+
+interface OutcomeRow {
+  key: string;
+  label: string;
+  tick: string;
+  value: number;
+}
+
+function Probability({ match, outcomes }: { match: MatchView; outcomes: OutcomeRow[] }) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-3">
+      <Card className="lg:col-span-2">
+        <CardHeader>
+          <CardTitle>Model probability</CardTitle>
+          <CardDescription>Fair odds shown for reference</CardDescription>
+        </CardHeader>
+        <CardBody className="grid gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-3">
+          {outcomes.map((outcome) => {
+            const odds = impliedOdds(outcome.value);
+            return (
+              <div key={outcome.key} className="bg-surface px-4 py-4">
+                <div className="flex items-baseline gap-2">
+                  <span className="font-mono text-small text-alpha">{outcome.tick}</span>
+                  <span className="min-w-0 truncate text-small text-muted">{outcome.label}</span>
+                </div>
+                <p className="tabular mt-2 font-mono text-data">{pct(outcome.value)}</p>
+                <p className="tabular mt-1 font-mono text-fine text-muted">
+                  fair {odds ? odds.toFixed(2) : '—'}
+                </p>
+              </div>
+            );
+          })}
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Reading it</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-4">
+          <ConfidenceScore score={match.confidence} />
+          <div className="flex items-center justify-between gap-3 border-t border-line pt-4">
+            <span className="eyebrow">Risk</span>
+            <RiskBadge score={match.risk} />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="eyebrow">Model version</span>
+            <span className="tabular font-mono text-small">{match.modelVersion}</span>
+          </div>
+          <p className="border-t border-line pt-4 text-fine leading-relaxed text-muted">
+            Confidence and risk answer different questions. Confidence is how much evidence sits
+            behind the estimate; risk is how widely the simulated outcomes spread. A fixture can be
+            confidently unpredictable.
+          </p>
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------
+   Monte Carlo and AI: this screen states what exists and hands over to
+   the tool that produces it, rather than showing a placeholder chart.
+   ------------------------------------------------------------------ */
+
+function MonteCarloPanel({ match }: { match: MatchView }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Monte Carlo</CardTitle>
+        <CardDescription>Run on demand</CardDescription>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <p className="max-w-2xl text-small text-muted">
+          Simulations are not stored against a fixture — they are run when you ask for them, so the
+          path count and scenario are yours to choose. The lab opens with this fixture selected.
+        </p>
+        <dl className="grid gap-3 sm:grid-cols-3">
+          <Figure label="Model distribution" value={pct(match.probabilities.home, 0)} hint="Home win" />
+          <Figure label="Risk" value={`${Math.round(match.risk * 100)}`} hint="Outcome dispersion" />
+          <Figure label="Confidence" value={`${Math.round(match.confidence * 100)}`} hint="Out of 100" />
+        </dl>
+        <ButtonLink href={`/monte-carlo?match=${match.id}`} icon="simulation">
+          Open the simulation lab
+        </ButtonLink>
+      </CardBody>
+    </Card>
+  );
+}
+
+function AnalysisPanel({ match }: { match: MatchView }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>AI analysis</CardTitle>
+        <CardDescription>Explanation, not prediction</CardDescription>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <p className="max-w-2xl text-small text-muted">
+          The analyst explains the figures on this page and nothing else. It has no access to news,
+          team announcements or market prices, and it produces no numbers of its own — so there is
+          no stored write-up here to read, only a conversation to start.
+        </p>
+        <div className="rounded-lg border border-line bg-raised/40 px-4 py-3">
+          <p className="eyebrow">Context it will be given</p>
+          <p className="mt-1.5 font-mono text-fine leading-relaxed text-muted">
+            {match.homeTeam} vs {match.awayTeam} · 1X2 distribution · goals market · top scorelines ·
+            confidence {Math.round(match.confidence * 100)} · risk {Math.round(match.risk * 100)} ·{' '}
+            {match.modelVersion}
+          </p>
+        </div>
+        <ButtonLink href={`/ai-analyst?match=${match.id}`} icon="analyst">
+          Ask the analyst
+        </ButtonLink>
+      </CardBody>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------
+   Market. The sample dataset carries no bookmaker prices, so the panel
+   shows the model's own fair prices and says what is missing.
+   ------------------------------------------------------------------ */
+
+function Market({
+  goalsMarkets,
+  outcomes,
+}: {
+  goalsMarkets: Array<{ label: string; value: number }>;
+  outcomes: OutcomeRow[];
+}) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle>Fair prices</CardTitle>
+          <CardDescription>Implied by the model</CardDescription>
+        </CardHeader>
+        <CardBody className="space-y-3">
+          {outcomes.map((outcome) => {
+            const odds = impliedOdds(outcome.value);
+            return (
+              <div key={outcome.key} className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate text-small text-muted">
+                  <span className="pr-2 font-mono text-alpha">{outcome.tick}</span>
+                  {outcome.label}
+                </span>
+                <span className="tabular shrink-0 font-mono text-small">
+                  {odds ? odds.toFixed(2) : '—'}
+                </span>
+              </div>
+            );
+          })}
+          <p className="border-t border-line pt-3 text-fine leading-relaxed text-muted">
+            A fair price is the model probability inverted, with no margin added. Compare it with a
+            bookmaker&rsquo;s price to see which side of the market the model sits on.
+          </p>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Goals market</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-3.5">
+          {goalsMarkets.map((market) => (
+            <ProgressBar
+              key={market.label}
+              label={market.label}
+              value={market.value}
+              valueLabel={`${pct(market.value)} · ${impliedOdds(market.value)?.toFixed(2) ?? '—'}`}
+              size="sm"
+            />
+          ))}
+        </CardBody>
+      </Card>
+
+      <Card variant="warning" className="lg:col-span-2">
+        <CardBody className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="font-display text-h3 font-semibold">No captured prices</p>
+            <p className="mt-1 text-small text-muted">
+              This fixture is from the sample dataset, which carries no bookmaker snapshots. Value
+              against the market can only be computed where real prices have been stored.
+            </p>
+          </div>
+          <Badge variant="premium">Demo data</Badge>
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+function Figure({ label, value, hint }: { label: string; value: string; hint: string }) {
+  return (
+    <div className="rounded-lg border border-line bg-raised/40 px-3 py-2.5">
+      <dt className="eyebrow truncate">{label}</dt>
+      <dd className="tabular mt-1 font-mono text-data-sm">{value}</dd>
+      <dd className="mt-0.5 text-fine text-muted">{hint}</dd>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------
+   Statistics.
+   ------------------------------------------------------------------ */
 
 const ROWS: Array<{ key: keyof TeamStats; label: string; format: (v: number) => string }> = [
   { key: 'form',        label: 'Recent form',      format: (v) => pct(v, 0) },
@@ -192,6 +425,11 @@ const ROWS: Array<{ key: keyof TeamStats; label: string; format: (v: number) => 
   { key: 'goalsAgainst',label: 'Goals conceded',   format: (v) => v.toFixed(0) },
 ];
 
+/**
+ * A three-column comparison rather than a data table: the metric name sits
+ * between the two figures so the eye reads across a single row, and the
+ * leading side is the only thing coloured.
+ */
 function StatComparison({
   home,
   away,
@@ -204,12 +442,15 @@ function StatComparison({
   awayName: string;
 }) {
   return (
-    <table className="w-full text-sm">
+    <table className="w-full text-small">
+      <caption className="sr-only">
+        {homeName} compared with {awayName}, season to date
+      </caption>
       <thead>
         <tr className="border-b border-line">
-          <th className="eyebrow pb-2 text-left font-normal">{homeName}</th>
-          <th className="eyebrow pb-2 text-center font-normal">Metric</th>
-          <th className="eyebrow pb-2 text-right font-normal">{awayName}</th>
+          <th scope="col" className="eyebrow pb-2 text-left font-normal">{homeName}</th>
+          <th scope="col" className="eyebrow pb-2 text-center font-normal">Metric</th>
+          <th scope="col" className="eyebrow pb-2 text-right font-normal">{awayName}</th>
         </tr>
       </thead>
       <tbody className="divide-y divide-line">
@@ -224,7 +465,7 @@ function StatComparison({
               <td className={`tabular py-2.5 font-mono ${homeLeads ? 'text-alpha' : 'text-ink'}`}>
                 {row.format(h)}
               </td>
-              <td className="py-2.5 text-center text-xs text-muted">{row.label}</td>
+              <td className="py-2.5 text-center text-fine text-muted">{row.label}</td>
               <td className={`tabular py-2.5 text-right font-mono ${homeLeads ? 'text-ink' : 'text-alpha'}`}>
                 {row.format(a)}
               </td>
